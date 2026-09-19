@@ -1,0 +1,30 @@
+{
+  "name": "release-cherry-pick",
+  "version": "1.0.0",
+  "description": "CLI tool for automating release cherry-pick and GitLab MR creation",
+  "main": "src/index.js",
+  "bin": {
+    "release-cherry-pick": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Tests not yet implemented\""
+  },
+  "keywords": [
+    "cli",
+    "git",
+    "cherry-pick",
+    "gitlab",
+    "release"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "chalk": "^4.1.2",
+    "commander": "^15.0.0",
+    "inquirer": "^8.2.7",
+    "simple-git": "^3.36.0"
+  }
+}
