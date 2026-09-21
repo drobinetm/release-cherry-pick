@@ -12,14 +12,17 @@ function generateSummary(releaseStatus, outputPath = null) {
     summary: {
       total: summary.total,
       procede: summary.procede,
-      noProcede: summary.noProcede
+      noProcede: summary.noProcede,
+      conflict: summary.conflict,
+      skipped: summary.skipped
     },
     results: summary.results.map(r => ({
       taskId: r.taskId,
       branch: r.branch,
       status: r.status,
       mrLink: r.mrLink,
-      conflicts: r.conflicts
+      conflicts: r.conflicts,
+      reason: r.reason
     }))
   };
 
@@ -46,12 +49,14 @@ function generateMarkdownSummary(releaseStatus) {
   markdown += `|--------|-------|\n`;
   markdown += `| Total | ${summary.total} |\n`;
   markdown += `| PROCEDE | ${summary.procede} |\n`;
-  markdown += `| NO PROCEDE | ${summary.noProcede} |\n\n`;
+  markdown += `| NO PROCEDE | ${summary.noProcede} |\n`;
+  markdown += `| CONFLICT | ${summary.conflict} |\n`;
+  markdown += `| SKIPPED | ${summary.skipped} |\n\n`;
 
   markdown += `## Results\n\n`;
 
   for (const result of summary.results) {
-    const statusIcon = result.status === 'PROCEDE' ? '✅' : '❌';
+    const statusIcon = result.status === 'PROCEDE' ? '✅' : (result.status === 'CONFLICT' ? '⚠️' : (result.status === 'SKIPPED' ? 'ℹ️' : '❌'));
     markdown += `### ${statusIcon} ${result.taskId}\n\n`;
     markdown += `- **Branch:** ${result.branch}\n`;
     markdown += `- **Status:** ${result.status}\n`;
@@ -60,7 +65,12 @@ function generateMarkdownSummary(releaseStatus) {
       markdown += `- **MR:** [View MR](${result.mrLink})\n`;
     }
 
-    if (result.conflicts.length > 0) {
+    if (result.status === 'CONFLICT') {
+      markdown += `- **Needs manual resolution by the user.**\n`;
+      markdown += `- **Conflicting files:** ${result.conflicts.join(', ')}\n`;
+    } else if (result.status === 'SKIPPED') {
+      markdown += `- **${result.reason || 'Nothing to release — no action needed.'}**\n`;
+    } else if (result.conflicts.length > 0) {
       markdown += `- **Conflicts:** ${result.conflicts.join(', ')}\n`;
     }
 

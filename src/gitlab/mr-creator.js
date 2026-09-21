@@ -1,51 +1,53 @@
 'use strict';
 
-const GitLabClient = require('./client');
 const logger = require('../utils/logger');
 const { GitLabError } = require('../utils/errors');
+const glab = require('../glab/client');
+const { generateMRTitleAndDescription } = require('./ai-description');
 
-async function createMR(config, sourceBranch, taskId, description, commits = []) {
-  const client = new GitLabClient(config.gitlab.url, config.gitlab.token, config.gitlab.projectId);
+function buildFallbackTitle(config, taskId, description) {
+  const format = (config.release && config.release.mrTitleFormat) || '[{taskId}] {description}';
+  return format.replace('{taskId}', taskId).replace('{description}', description);
+}
+
+function buildFallbackDescription(taskId, description, commits) {
+  let mrDescription = `## ${taskId}: ${description}\n\n### Commits included:\n\n`;
+  for (const commit of commits) {
+    mrDescription += `- ${commit.hash}: ${commit.message}\n`;
+  }
+  return mrDescription;
+}
+
+async function createMR(config, { sourceBranch, targetBranch, taskId, description, commits = [], reviewers = [] }) {
+  let title = buildFallbackTitle(config, taskId, description);
+  let mrDescription = buildFallbackDescription(taskId, description, commits);
+
+  const aiResult = await generateMRTitleAndDescription(config, taskId, description, commits);
+  if (aiResult) {
+    title = aiResult.title;
+    mrDescription = aiResult.description;
+  }
 
   try {
-    // Validate connection first
-    await client.validateConnection();
-
-    // Format title with task ID
-    const title = `[${taskId}] ${description}`;
-
-    // Generate description from commits if not provided
-    let mrDescription = description;
-    if (commits.length > 0) {
-      mrDescription = generateDescriptionFromCommits(taskId, description, commits);
-    }
-
-    // Create the MR
-    const result = await client.createMergeRequest(
+    const result = await glab.createMergeRequest({
       sourceBranch,
-      config.git.stagingBranch,
+      targetBranch,
       title,
-      mrDescription
-    );
+      description: mrDescription,
+      reviewers,
+      squash: config.release.mrSquash !== false,
+      removeSourceBranch: config.release.mrRemoveSourceBranch !== false
+    });
 
+    logger.success(`MR created: ${result.url}`);
     return result;
   } catch (error) {
     throw new GitLabError(`Failed to create MR for ${taskId}: ${error.message}`);
   }
 }
 
-function generateDescriptionFromCommits(taskId, description, commits) {
-  let mrDescription = `## ${taskId}: ${description}\n\n`;
-  mrDescription += `### Commits included:\n\n`;
-
-  for (const commit of commits) {
-    mrDescription += `- ${commit.hash}: ${commit.message}\n`;
-  }
-
-  return mrDescription;
-}
-
 module.exports = {
   createMR,
-  generateDescriptionFromCommits
+  buildFallbackTitle,
+  buildFallbackDescription
 };

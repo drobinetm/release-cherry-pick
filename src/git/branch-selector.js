@@ -34,6 +34,7 @@ async function selectBranchesInteractively() {
 
 async function getRemoteBranches() {
   try {
+    await git.fetch();
     const result = await git.branch(['-r']);
     const branches = result.all
       .filter(branch => branch.includes('origin/feature/') || branch.includes('origin/hotfix/'))
@@ -45,6 +46,18 @@ async function getRemoteBranches() {
     logger.error(`Error getting branches: ${error.message}`);
     return [];
   }
+}
+
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Finds real remote branch(es) whose feature/hotfix name starts with the given task ID
+// (case-insensitive), e.g. taskId "PB-I3245" matches "hotfix/PB-I3245-favicon-incorrect-payments".
+async function resolveBranchNameForTaskId(taskId, branches = null) {
+  const list = branches || (await getRemoteBranches());
+  const re = new RegExp(`^(feature|hotfix)/${escapeRegex(taskId)}(?:[-_]|$)`, 'i');
+  return list.filter(branch => re.test(branch));
 }
 
 async function searchBranches(searchTerm) {
@@ -68,6 +81,7 @@ async function validateBranchExists(branchName) {
 module.exports = {
   selectBranchesInteractively,
   getRemoteBranches,
+  resolveBranchNameForTaskId,
   searchBranches,
   validateBranchExists
 };

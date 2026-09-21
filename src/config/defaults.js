@@ -10,19 +10,21 @@ const defaultConfig = {
     }
   },
   gitlab: {
-    url: '',
-    token: '',
-    projectId: ''
+    host: ''
   },
   ai: {
     enabled: false,
-    provider: 'openai',
-    apiKey: ''
+    provider: 'anthropic',
+    apiKey: '',
+    model: 'claude-haiku-4-5-20251001'
   },
   release: {
     autoCreateMR: true,
     mrTitleFormat: '[{taskId}] {description}',
-    defaultAssignees: []
+    defaultAssignees: [],
+    mrSquash: true,
+    mrRemoveSourceBranch: true,
+    defaultReviewerPattern: '^che(i|y)ner$'
   }
 };
 

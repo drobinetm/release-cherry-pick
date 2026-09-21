@@ -1,14 +1,24 @@
 'use strict';
 
 const simpleGit = require('simple-git');
-const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 const { GitError } = require('../utils/errors');
 
 const git = simpleGit();
 
-async function createReleaseBranch(sourceBranch, taskId, stagingBranch = 'staging') {
-  const releaseBranchName = `release/${taskId.toLowerCase()}`;
+function buildReleaseBranchName(sourceBranch, branchPrefix = {}) {
+  let name = sourceBranch;
+  for (const prefix of Object.values(branchPrefix)) {
+    if (prefix && prefix !== branchPrefix.release && name.startsWith(prefix)) {
+      name = name.slice(prefix.length);
+      break;
+    }
+  }
+  return `release/${name}`;
+}
+
+async function createReleaseBranch(sourceBranch, stagingBranch = 'staging', branchPrefix = {}) {
+  const releaseBranchName = buildReleaseBranchName(sourceBranch, branchPrefix);
 
   logger.info(`Creating release branch: ${releaseBranchName}`);
 
@@ -23,23 +33,15 @@ async function createReleaseBranch(sourceBranch, taskId, stagingBranch = 'stagin
     );
 
     if (branchExists) {
-      logger.warn(`Release branch ${releaseBranchName} already exists`);
-      const { overwrite } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'overwrite',
-          message: `Do you want to overwrite ${releaseBranchName}?`,
-          default: false
-        }
-      ]);
-
-      if (!overwrite) {
-        return { success: false, branch: releaseBranchName, reason: 'Branch exists and user chose not to overwrite' };
-      }
-
-      // Delete existing branch
-      await git.deleteLocalBranch(releaseBranchName, true);
-      await git.push(['--delete', 'origin', releaseBranchName]);
+      // Deleting/overwriting a remote branch here would be a destructive action on shared
+      // state (it may already have commits or an open MR) — never do it automatically, even
+      // behind a confirmation prompt. Report it and let the user resolve it manually.
+      logger.error(`Release branch ${releaseBranchName} already exists on origin. Resolve this manually (delete it, or pick a different branch) and re-run.`);
+      return {
+        success: false,
+        branch: releaseBranchName,
+        reason: `Release branch ${releaseBranchName} already exists on origin — needs manual decision by the user`
+      };
     }
 
     // Checkout staging and create release branch
@@ -74,8 +76,20 @@ async function getLatestCommitHash(branchName) {
   }
 }
 
+async function pushBranch(branchName) {
+  try {
+    await git.push(['-u', 'origin', branchName]);
+    logger.success(`Pushed ${branchName} to origin`);
+    return true;
+  } catch (error) {
+    throw new GitError(`Failed to push branch ${branchName}: ${error.message}`);
+  }
+}
+
 module.exports = {
+  buildReleaseBranchName,
   createReleaseBranch,
   checkoutBranch,
-  getLatestCommitHash
+  getLatestCommitHash,
+  pushBranch
 };

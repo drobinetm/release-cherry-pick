@@ -1,14 +1,17 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 const { loadConfig, configExists } = require('../config/loader');
 const { setupWizard } = require('../config/setup');
 const { parseBranchListFile } = require('../git/branch-parser');
-const { selectBranchesInteractively } = require('../git/branch-selector');
-const { createReleaseBranch } = require('../git/release-branch');
+const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
+const { createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { cherryPickCommits } = require('../git/cherry-pick');
-const { getCommits } = require('../gitlab/client');
+const glab = require('../glab/client');
+const { selectReviewer } = require('../gitlab/reviewer-selector');
 const { createMR } = require('../gitlab/mr-creator');
 const ReleaseStatus = require('../git/release-status');
 const { generateMarkdownSummary } = require('../report/summary');
@@ -44,6 +47,11 @@ async function runRelease(options = {}) {
     }
   }
 
+  // Preflight: make sure we're connected to GitLab via glab before doing any GitLab work
+  if (config.release.autoCreateMR) {
+    await glab.ensureAuthenticated(config);
+  }
+
   // Get branches to process
   let branches = [];
 
@@ -51,12 +59,35 @@ async function runRelease(options = {}) {
     // Parse branches from file
     try {
       const branchList = parseBranchListFile(options.file);
-      branches = branchList.map(b => ({
-        taskId: b.taskId,
-        description: b.description,
-        branchName: `feature/${b.taskId.toLowerCase()}`
-      }));
-      logger.info(`Loaded ${branches.length} branches from file`);
+      logger.info(`Loaded ${branchList.length} task(s) from file, resolving real branch names...`);
+
+      const remoteBranches = await getRemoteBranches();
+
+      for (const b of branchList) {
+        const matches = await resolveBranchNameForTaskId(b.taskId, remoteBranches);
+        let branchName;
+
+        if (matches.length === 1) {
+          branchName = matches[0];
+          logger.info(`${b.taskId} -> ${branchName}`);
+        } else if (matches.length > 1) {
+          logger.warn(`Multiple remote branches match ${b.taskId}: ${matches.join(', ')}`);
+          const { chosen } = await inquirer.prompt([
+            {
+              type: 'list',
+              name: 'chosen',
+              message: `Select the branch for ${b.taskId}:`,
+              choices: matches
+            }
+          ]);
+          branchName = chosen;
+        } else {
+          branchName = `feature/${b.taskId.toLowerCase()}`;
+          logger.warn(`No remote branch found matching ${b.taskId}; guessing ${branchName} (may not exist)`);
+        }
+
+        branches.push({ taskId: b.taskId, description: b.description, branchName });
+      }
     } catch (error) {
       logger.error(error.message);
       return;
@@ -85,6 +116,7 @@ async function runRelease(options = {}) {
 
   // Process each branch
   const releaseStatus = new ReleaseStatus();
+  let projectMembers = null;
 
   for (const branchInfo of branches) {
     logger.header(`Processing ${branchInfo.taskId}`);
@@ -93,21 +125,33 @@ async function runRelease(options = {}) {
       // Create release branch
       const releaseBranch = await createReleaseBranch(
         branchInfo.branchName,
-        branchInfo.taskId,
-        config.git.stagingBranch
+        config.git.stagingBranch,
+        config.git.branchPrefix
       );
 
       if (!releaseBranch.success) {
-        releaseStatus.markNoProcede(branchInfo.taskId, releaseBranch.branch);
+        releaseStatus.markNoProcede(branchInfo.taskId, releaseBranch.branch, [releaseBranch.reason]);
         continue;
       }
 
-      // Cherry-pick commits
-      const cherryPickResult = await cherryPickCommits(branchInfo.branchName);
+      // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging
+      const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch);
 
       if (!cherryPickResult.success) {
         const conflictFiles = cherryPickResult.conflicts.flatMap(c => c.files);
-        releaseStatus.markNoProcede(releaseBranch.branch, conflictFiles);
+        // Conflict: do nothing further for this branch (no push, no MR) — just record it.
+        releaseStatus.markConflict(branchInfo.taskId, releaseBranch.branch, conflictFiles);
+        continue;
+      }
+
+      if (cherryPickResult.commitsCherryPicked === 0) {
+        // No real commits landed (either none were found tagged for this task, or they were
+        // all already applied / empty diffs) — nothing to push or open an MR for.
+        const reason = cherryPickResult.commitsAlreadyApplied > 0
+          ? `Changes already present on ${config.git.stagingBranch} — nothing to release`
+          : `No commits tagged [${branchInfo.taskId}] found on ${branchInfo.branchName}`;
+        releaseStatus.markSkipped(branchInfo.taskId, releaseBranch.branch, reason);
+        logger.warn(`${branchInfo.taskId}: ${reason}`);
         continue;
       }
 
@@ -115,8 +159,21 @@ async function runRelease(options = {}) {
       let mrLink = null;
       if (config.release.autoCreateMR) {
         try {
-          const commits = await getCommits(config, branchInfo.branchName);
-          const mr = await createMR(config, releaseBranch.branch, branchInfo.taskId, branchInfo.description, commits);
+          await pushBranch(releaseBranch.branch);
+
+          if (!projectMembers) {
+            projectMembers = await glab.getProjectMembers();
+          }
+          const reviewers = await selectReviewer(projectMembers, config.release.defaultReviewerPattern);
+
+          const mr = await createMR(config, {
+            sourceBranch: releaseBranch.branch,
+            targetBranch: config.git.stagingBranch,
+            taskId: branchInfo.taskId,
+            description: branchInfo.description,
+            commits: cherryPickResult.commits,
+            reviewers
+          });
           mrLink = mr.url;
         } catch (error) {
           logger.warn(`Failed to create MR: ${error.message}`);
@@ -134,6 +191,23 @@ async function runRelease(options = {}) {
 
   // Display summary
   releaseStatus.displaySummary();
+
+  // Offer to save the report to a file so conflicts are visible outside the console too
+  const { saveReport } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'saveReport',
+      message: 'Save release summary to release-summary.md?',
+      default: true
+    }
+  ]);
+
+  if (saveReport) {
+    const markdown = generateMarkdownSummary(releaseStatus);
+    const summaryPath = path.join(process.cwd(), 'release-summary.md');
+    fs.writeFileSync(summaryPath, markdown, 'utf8');
+    logger.success(`Saved ${summaryPath}`);
+  }
 
   // Generate documentation
   const { generateDocs } = await inquirer.prompt([

@@ -39,36 +39,30 @@ async function setupWizard() {
     },
     {
       type: 'input',
-      name: 'gitlabUrl',
-      message: 'GitLab URL:',
-      default: config.gitlab.url
-    },
-    {
-      type: 'password',
-      name: 'gitlabToken',
-      message: 'GitLab token:',
-      mask: '*',
-      default: config.gitlab.token
-    },
-    {
-      type: 'input',
-      name: 'gitlabProjectId',
-      message: 'GitLab Project ID:',
-      default: config.gitlab.projectId
+      name: 'gitlabHost',
+      message: 'GitLab hostname (leave blank for gitlab.com):',
+      default: config.gitlab.host
     },
     {
       type: 'confirm',
       name: 'aiEnabled',
-      message: 'Enable AI for MR descriptions?',
+      message: 'Enable AI (Anthropic Claude) for MR titles/descriptions?',
       default: config.ai.enabled
     },
     {
       type: 'input',
       name: 'aiApiKey',
-      message: 'AI API Key:',
+      message: 'Anthropic API key (leave blank to use ANTHROPIC_API_KEY env var):',
       mask: '*',
       when: (answers) => answers.aiEnabled,
       default: config.ai.apiKey
+    },
+    {
+      type: 'input',
+      name: 'aiModel',
+      message: 'Anthropic model:',
+      when: (answers) => answers.aiEnabled,
+      default: config.ai.model
     }
   ];
 
@@ -84,14 +78,13 @@ async function setupWizard() {
       }
     },
     gitlab: {
-      url: answers.gitlabUrl,
-      token: answers.gitlabToken,
-      projectId: answers.gitlabProjectId
+      host: answers.gitlabHost
     },
     ai: {
       enabled: answers.aiEnabled,
       provider: config.ai.provider,
-      apiKey: answers.aiApiKey || config.ai.apiKey
+      apiKey: answers.aiApiKey || config.ai.apiKey,
+      model: answers.aiModel || config.ai.model
     },
     release: config.release
   };
