@@ -8,7 +8,12 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "echo \"Tests not yet implemented\""
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.js": "eslint --fix"
   },
   "keywords": [
     "cli",
@@ -26,5 +31,11 @@
     "commander": "^15.0.0",
     "inquirer": "^8.2.7",
     "simple-git": "^3.36.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.11.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1"
   }
 }
