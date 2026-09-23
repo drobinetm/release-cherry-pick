@@ -41,7 +41,8 @@ A cherry-pick can also come back **empty** (git: "The previous cherry-pick is no
 
 ## Conventions
 
-- Always log via `src/utils/logger.js`, not raw `console.log` (a couple of `console.log(JSON.stringify(...))` calls exist only for `config --show`).
+- Always log via `src/utils/logger.js`, not raw `console.log` (a couple of `console.log(JSON.stringify(...))` calls exist only for `config --show`, which prints a copy with `gitlab.token` masked via `maskSecret` in `src/utils/secrets.js`).
+- AI defaults: `ai.provider`/`ai.model`/`ai.baseURL` default to `''` on purpose — `ensureAiSettings` (in `setup.js`) prompts for provider/model at release time when AI is enabled and they're missing, and an empty `baseURL` lets `resolveBaseURL` pick each provider's own endpoint (a non-empty `config.ai.baseURL` wins for *any* provider).
 - Errors: throw the appropriate `AppError` subclass; top-level handlers in `src/index.js` catch, log `error.message`, and `process.exit(1)`.
 - Config is plaintext JSON in the target repo (`.release-cherry-pick.json`) — `gitlab.token` (PAT with `api` scope; can also come from `GITLAB_TOKEN` env) and optional `gitlab.host` for self-managed GitLab; project id is resolved from the `origin` remote, not stored.
 - Branch naming: original branches are `feature/*`/`hotfix/*`; release branches are `release/<original-name-with-known-prefix-stripped>` (e.g. `feature/PB-123-list-user` → `release/PB-123-list-user`) via `buildReleaseBranchName` in `src/git/release-branch.js`. Prefixes configurable via `git.branchPrefix` and honored everywhere: the release prefix names the release branch, and every non-release prefix (`getSourcePrefixes` in `src/git/branch-selector.js`, falling back to the defaults if none configured) defines which remote branches are listed/matched by task ID. Staging branch defaults to `staging`.

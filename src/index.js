@@ -7,6 +7,7 @@ const { runRelease } = require('./workflow/release');
 const { setupWizard } = require('./config/setup');
 const { loadConfig } = require('./config/loader');
 const logger = require('./utils/logger');
+const { maskSecret } = require('./utils/secrets');
 
 const program = createProgram();
 
@@ -37,7 +38,9 @@ program
         const config = loadConfig();
         if (config) {
           logger.info('Current configuration:');
-          console.log(JSON.stringify(config, null, 2));
+          const shown = JSON.parse(JSON.stringify(config));
+          shown.gitlab.token = maskSecret(shown.gitlab.token);
+          console.log(JSON.stringify(shown, null, 2));
         } else {
           logger.warn('No configuration found');
         }
