@@ -8,11 +8,11 @@ This file gives Claude Code context on the `release-cherry-pick` repository.
 
 - Entry point / bin: `src/index.js` (exposes the `release-cherry-pick` command, `main` in `package.json`)
 - Module system: CommonJS (`require`/`module.exports`), async/await throughout
-- GitLab access goes through the `glab` CLI (shelled out to via `child_process`) — the tool has no direct GitLab REST/token client. `glab` must be installed and on `PATH`; auth is `glab`'s own (`glab auth status`/`glab auth login`), not managed by this tool's config.
+- GitLab access is a direct REST client (`src/gitlab/client.js`, native `fetch`) authenticated with a Personal Access Token (scope `api`): `gitlab.token` in config, falling back to the `GITLAB_TOKEN` env var. The project is resolved from the `origin` remote URL. No `glab` dependency.
 
 ## Commands
 
-- `release-cherry-pick release [-f <file> | -b <branches>]` → `runRelease()` in `src/workflow/release.js`. Resolves branches from a file, a CLI list, or interactively, then per branch: create release branch from staging → cherry-pick commits → (if `config.release.autoCreateMR`) push, select a reviewer, and create a GitLab MR via `glab`.
+- `release-cherry-pick release [-f <file> | -b <branches>]` → `runRelease()` in `src/workflow/release.js`. Resolves branches from a file, a CLI list, or interactively, then per branch: create release branch from staging → cherry-pick commits → (if `config.release.autoCreateMR`) push, select a reviewer, and create a GitLab MR via the REST API.
 - `release-cherry-pick config [--init | --show]` → `setupWizard()` (Inquirer) or `loadConfig()`, both in `src/config/`.
 
 ## Architecture (`src/`)
@@ -20,11 +20,11 @@ This file gives Claude Code context on the `release-cherry-pick` repository.
 - `cli/` — Commander program factory (`createProgram()`). Note: the actual commands are registered in `src/index.js`, not here — this module only sets name/description/version.
 - `config/` — `defaults.js` (default config shape), `loader.js` (reads/writes `.release-cherry-pick.json` in `process.cwd()` of the *target* repo), `setup.js` (Inquirer wizard), `validator.js`.
 - `git/` — `branch-parser.js` (parses `*TASK-ID*: description` lines — no branch-name field), `branch-selector.js` (`getRemoteBranches` fetches then lists `feature/*`/`hotfix/*` remote branches; `resolveBranchNameForTaskId(taskId, branches?)` finds the real remote branch(es) matching a task ID, used by the `--file` input path instead of guessing a name), `release-branch.js` (`buildReleaseBranchName`/`createReleaseBranch`/`pushBranch` — creates `release/<original-branch-name-with-known-prefix-stripped>` off staging; if the release branch already exists remotely it does **not** auto-offer to delete/overwrite it — that's a destructive op on a shared branch — it just reports failure and leaves it for the user to resolve manually), `cherry-pick.js` (cherry-pick via `git.raw(['cherry-pick', ...])`; see "Commit selection" below), `release-status.js` (`ReleaseStatus` class — tracks per-branch `PROCEDE` / `NO PROCEDE` / `CONFLICT` / `SKIPPED` outcomes).
-- `glab/client.js` — wraps the `glab` CLI (`child_process.execFile`/`spawn`, no shell interpolation): `isGlabInstalled`, `checkAuthStatus`, `login` (interactive, inherited stdio), `ensureAuthenticated` (preflight used by `runRelease`), `getProjectMembers` (`glab api projects/:id/members/all`), `createMergeRequest` (`glab mr create ...`).
-- `gitlab/` — `mr-creator.js` (orchestrates: fallback title/description from `config.release.mrTitleFormat` + commit list, tries AI content, then calls `glab.createMergeRequest` with squash/remove-source-branch flags), `ai-description.js` (real Anthropic integration — see below), `reviewer-selector.js` (Inquirer checkbox over project members, pre-checking whichever username matches `config.release.defaultReviewerPattern`).
+- `gitlab/client.js` — REST client (native `fetch`, no shelling out): `ensureAuthenticated` (resolves PAT from `gitlab.token`/`GITLAB_TOKEN` or prompts interactively, validates via `GET /user`), `getProjectMembers` (`GET /projects/:id/members/all` with pagination), `createMergeRequest` (`POST /projects/:id/merge_requests`, maps reviewer usernames → `reviewer_ids`). Project path is derived from the `origin` remote URL.
+- `gitlab/` — `client.js` (REST API as above), `mr-creator.js` (orchestrates: fallback title/description from `config.release.mrTitleFormat` + commit list, tries AI content, then calls `gitlab.createMergeRequest` with squash/remove-source-branch flags), `ai-description.js` (real Anthropic integration — see below), `reviewer-selector.js` (Inquirer checkbox over project members, pre-checking whichever username matches `config.release.defaultReviewerPattern`).
 - `doc/` — `agents-generator.js` / `rpd-generator.js`: write `AGENTS.md` / `RPD.md` into the **target** project's root (prompt before overwrite).
 - `report/` — `summary.js`: console + markdown release summaries (`PROCEDE`/`NO PROCEDE`/`CONFLICT`/`SKIPPED` status).
-- `workflow/release.js` — the main orchestrator (`runRelease`) tying config, `glab` auth preflight, branch resolution, cherry-picking, reviewer selection, MR creation, and reporting together.
+- `workflow/release.js` — the main orchestrator (`runRelease`) tying config, GitLab token preflight, branch resolution, cherry-picking, reviewer selection, MR creation, and reporting together.
 - `utils/` — `errors.js` (`AppError` base, subclassed by `ConfigError`/`GitError`/`GitLabError`), `logger.js` (chalk-based colored logger: `info/warn/error/success/header/table`).
 
 ## Commit selection for cherry-pick (important, found via real-world testing)
@@ -43,12 +43,12 @@ A cherry-pick can also come back **empty** (git: "The previous cherry-pick is no
 
 - Always log via `src/utils/logger.js`, not raw `console.log` (a couple of `console.log(JSON.stringify(...))` calls exist only for `config --show`).
 - Errors: throw the appropriate `AppError` subclass; top-level handlers in `src/index.js` catch, log `error.message`, and `process.exit(1)`.
-- Config is plaintext JSON in the target repo (`.release-cherry-pick.json`) — no `gitlab.token`/`gitlab.url`/`gitlab.projectId` exist anymore (glab owns GitLab auth and resolves the project from the git remote); only an optional `gitlab.host` remains for self-managed GitLab instances.
+- Config is plaintext JSON in the target repo (`.release-cherry-pick.json`) — `gitlab.token` (PAT with `api` scope; can also come from `GITLAB_TOKEN` env) and optional `gitlab.host` for self-managed GitLab; project id is resolved from the `origin` remote, not stored.
 - Branch naming: original branches are `feature/*`/`hotfix/*`; release branches are `release/<original-name-with-known-prefix-stripped>` (e.g. `feature/PB-123-list-user` → `release/PB-123-list-user`) via `buildReleaseBranchName` in `src/git/release-branch.js`. Prefixes configurable via `git.branchPrefix`; staging branch defaults to `staging`.
 - Task IDs: uppercase alphanumeric with hyphen, e.g. `PB-I3217` (regex in `src/git/branch-parser.js`).
 - MR titles: `config.release.mrTitleFormat` (default `[{taskId}] {description}`), used as the fallback when AI generation is off/fails; AI-generated titles are instructed to keep the `[{taskId}] ` prefix.
-- MR options: `config.release.mrSquash` / `config.release.mrRemoveSourceBranch` both default `true` (GitLab's squash + delete-source-branch checkboxes), passed to `glab mr create`.
-- Reviewer: `config.release.defaultReviewerPattern` (default `'^che(i|y)ner$'`) is matched case-insensitively against real project members (`glab.getProjectMembers()`) to preselect a default in the per-branch reviewer prompt.
+- MR options: `config.release.mrSquash` / `config.release.mrRemoveSourceBranch` both default `true` (GitLab's squash + delete-source-branch checkboxes), sent as `squash` / `remove_source_branch` on `POST /projects/:id/merge_requests`.
+- Reviewer: `config.release.defaultReviewerPattern` (default `'^che(i|y)ner$'`) is matched case-insensitively against real project members (`gitlab.getProjectMembers()`) to preselect a default in the per-branch reviewer prompt; selected usernames are mapped to numeric `reviewer_ids` before the MR is created.
 - Domain terminology is Spanish-influenced (`PROCEDE`/`NO PROCEDE`/`CONFLICT`/`SKIPPED` status, `'es-ES'` locale in generated `RPD.md`), reflecting the team's locale.
 - `simple-git@3.36.0` has **no `cherryPick()` method** — cherry-pick operations must go through `git.raw(['cherry-pick', ...])`, not a hypothetical `git.cherryPick(...)`.
 
@@ -58,8 +58,8 @@ A cherry-pick can also come back **empty** (git: "The previous cherry-pick is no
 - `npm test` — placeholder only (`echo "Tests not yet implemented"`), not a real test runner.
 - `node test-e2e.js` — manual smoke script (no assertions) exercising branch parsing, config defaults, `ReleaseStatus`, markdown summary, and doc generation. Not wired to `npm test`.
 - `npm run lint` / `npm run lint:fix` — ESLint (flat config, `eslint.config.js`, `eslint:recommended` + CommonJS/Node globals). A Husky `pre-commit` hook (`.husky/pre-commit`) runs `lint-staged` (`*.js` → `eslint --fix`) automatically on every commit, only against staged files. No Prettier config present (despite AGENTS.md-generated output claiming ESLint conventions for target projects — that doc is about *target* projects, not this repo).
-- `glab` CLI flags used in `src/glab/client.js` (`--squash-before-merge`, `--remove-source-branch`, `--reviewer`, `--no-editor`, `glab api projects/:id/members/all`) are based on documented `glab` behavior but were not live-verified in this environment (local `glab` install hits a snap-confinement permission error unrelated to this codebase). Re-verify with `glab mr create --help` / `glab api --help` on a working machine if MR creation misbehaves.
-- The branch-creation, commit-selection, and empty-cherry-pick logic (everything in "Commit selection for cherry-pick" above) *was* validated against real data: a disposable local mirror clone of an actual production repo (PROBROKER, `gitlab.ingeniuscuba.com`), never pushed to or otherwise touching the real remote. `glab mr create`/reviewer-listing/AI generation were not exercised this way (no real GitLab MR was created, no Anthropic key configured).
+- The GitLab REST paths used in `src/gitlab/client.js` (`GET /user`, `GET /projects/:id/members/all`, `POST /projects/:id/merge_requests`, `PRIVATE-TOKEN` auth header, `reviewer_ids`) follow the public GitLab API docs but were **not** live-verified against a real instance from this environment (no token configured here). Re-verify with a test project if MR creation misbehaves.
+- The branch-creation, commit-selection, and empty-cherry-pick logic (everything in "Commit selection for cherry-pick" above) *was* validated against real data: a disposable local mirror clone of an actual production repo (PROBROKER, `gitlab.ingeniuscuba.com`), never pushed to or otherwise touching the real remote. MR creation/reviewer-listing/AI generation were not exercised this way (no real GitLab MR was created, no Anthropic key configured).
 
 ## Other tooling in this repo
 

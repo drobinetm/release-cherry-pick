@@ -10,13 +10,15 @@ const defaultConfig = {
     }
   },
   gitlab: {
-    host: ''
+    host: '',
+    token: ''
   },
   ai: {
-    enabled: false,
+    enabled: true,
     provider: 'anthropic',
     apiKey: '',
-    model: 'claude-haiku-4-5-20251001'
+    model: 'claude-haiku-4-5-20251001',
+    baseURL: 'https://api.anthropic.com/v1'
   },
   release: {
     autoCreateMR: true,
@@ -24,7 +26,8 @@ const defaultConfig = {
     defaultAssignees: [],
     mrSquash: true,
     mrRemoveSourceBranch: true,
-    defaultReviewerPattern: '^che(i|y)ner$'
+    defaultReviewerPattern: '^che(i|y)ner$',
+    branches: []
   }
 };
 

@@ -6,7 +6,7 @@
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![GitLab CLI](https://img.shields.io/badge/GitLab-glab%20CLI-FC6D26?logo=gitlab&logoColor=white)](https://gitlab.com/gitlab-org/cli)
+[![GitLab API](https://img.shields.io/badge/GitLab-REST%20API%20%2B%20PAT-FC6D26?logo=gitlab&logoColor=white)](https://docs.gitlab.com/api/rest/)
 [![AI](https://img.shields.io/badge/AI-Anthropic%20Claude-D97757)](https://docs.anthropic.com)
 [![CLI](https://img.shields.io/badge/type-CLI-informational)](#)
 
@@ -21,7 +21,7 @@ Shipping a release by hand — creating a release branch, cherry-picking each fi
 Given a list of task IDs (from a file, a `-b` flag, or interactive branch selection), for each one it:
 
 1. **Creates a release branch off `staging`**, named after the original branch (prefix stripped): `feature/PB-123-list-user` → `release/PB-123-list-user`.
-2. **Verifies you're connected to GitLab** via the `glab` CLI, and offers to run `glab auth login` if you're not.
+2. **Authenticates to GitLab** with a personal access token (`gitlab.token` in config, or the `GITLAB_TOKEN` env var), prompting for one if missing and validating it against `GET /user`.
 3. **Cherry-picks only that task's own commits** onto the release branch — matched by the team's `[TASK-ID] description` commit message convention (not a naive branch diff, which breaks when a branch wasn't cut from a recent `staging`).
 4. **Drafts the MR title and description with Anthropic Claude** from the picked commits, falling back to a static template if AI is disabled or fails.
 5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting whichever member matches your configured default reviewer pattern.
@@ -32,7 +32,7 @@ Given a list of task IDs (from a file, a `-b` flag, or interactive branch select
 ## Requirements
 
 - Node.js >= 18
-- [`glab`](https://gitlab.com/gitlab-org/cli#installation) (the GitLab CLI), installed and on `PATH`
+- A GitLab personal access token with the `api` scope (set as `gitlab.token` in config, or export `GITLAB_TOKEN`)
 - Run from inside the git repository you're releasing (it needs an `origin` remote pointing at GitLab)
 - (Optional) an Anthropic API key, for AI-generated MR titles/descriptions
 
@@ -91,13 +91,15 @@ Written to `.release-cherry-pick.json` in the project root you run the tool from
     }
   },
   "gitlab": {
-    "host": ""
+    "host": "",
+    "token": ""
   },
   "ai": {
     "enabled": false,
     "provider": "anthropic",
     "apiKey": "",
-    "model": "claude-haiku-4-5-20251001"
+    "model": "claude-haiku-4-5-20251001",
+    "baseURL": "https://api.anthropic.com/v1"
   },
   "release": {
     "autoCreateMR": true,
@@ -105,12 +107,13 @@ Written to `.release-cherry-pick.json` in the project root you run the tool from
     "defaultAssignees": [],
     "mrSquash": true,
     "mrRemoveSourceBranch": true,
-    "defaultReviewerPattern": "^che(i|y)ner$"
+    "defaultReviewerPattern": "^che(i|y)ner$",
+    "branches": []
   }
 }
 ```
 
-GitLab authentication is handled entirely by `glab` (`gitlab.host` is only needed for a self-managed instance) — no token is stored by this tool. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
+GitLab authentication uses a personal access token stored in `gitlab.token` (or the `GITLAB_TOKEN` environment variable, which takes effect when the config value is empty). `gitlab.host` is only needed for a self-managed instance (leave blank for gitlab.com). The project path is resolved from the `origin` remote URL — no `projectId` is stored. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
 
 ## Testing in development
 
@@ -132,7 +135,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    # run release-cherry-pick's functions/CLI here — origin points only at the local mirror
    ```
    This gives you real branches, real commit history, and real conflict scenarios with zero risk to the actual GitLab project.
-4. **`glab`-dependent behavior** (auth check/login, listing reviewers, MR creation) and **AI generation** need a real `glab` install/auth and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
+4. **GitLab API behavior** (token validation, listing reviewers, MR creation) and **AI generation** need a real token (PAT with `api` scope) and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
 
 ## Developers
 
