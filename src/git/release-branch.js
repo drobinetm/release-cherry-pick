@@ -14,7 +14,7 @@ function buildReleaseBranchName(sourceBranch, branchPrefix = {}) {
       break;
     }
   }
-  return `release/${name}`;
+  return `${branchPrefix.release || 'release/'}${name}`;
 }
 
 async function createReleaseBranch(sourceBranch, stagingBranch = 'staging', branchPrefix = {}) {

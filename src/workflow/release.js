@@ -60,7 +60,7 @@ async function runRelease(options = {}) {
     try {
       const branchList = parseBranchListFile(options.file);
       logger.info(`Loaded ${branchList.length} task(s) from file, resolving real branch names...`);
-      branches = await resolveTasksToBranches(branchList);
+      branches = await resolveTasksToBranches(branchList, config.git.branchPrefix);
     } catch (error) {
       logger.error(error.message);
       return;
@@ -70,7 +70,10 @@ async function runRelease(options = {}) {
     // remote branch) or a full branch name ("feature/PB-123-list-user")
     const entries = options.branches.split(',').map(b => b.trim()).filter(Boolean);
     const taskIds = entries.filter(isTaskId);
-    const resolved = await resolveTasksToBranches(taskIds.map(taskId => ({ taskId, description: taskId })));
+    const resolved = await resolveTasksToBranches(
+      taskIds.map(taskId => ({ taskId, description: taskId })),
+      config.git.branchPrefix
+    );
 
     for (const entry of entries) {
       if (isTaskId(entry)) {
@@ -84,7 +87,7 @@ async function runRelease(options = {}) {
     }
   } else {
     // Interactive selection
-    const selectedBranches = await selectBranchesInteractively();
+    const selectedBranches = await selectBranchesInteractively(config.git.branchPrefix);
     if (selectedBranches.length === 0) {
       logger.warn('No branches selected');
       return;
@@ -206,17 +209,17 @@ async function runRelease(options = {}) {
 }
 
 // Resolves each { taskId, description } to its real remote branch; prompts when several match.
-async function resolveTasksToBranches(tasks) {
+async function resolveTasksToBranches(tasks, branchPrefix = {}) {
   if (tasks.length === 0) {
     return [];
   }
 
-  const remoteBranches = await getRemoteBranches();
+  const remoteBranches = await getRemoteBranches(branchPrefix);
   const branches = [];
 
   for (const task of tasks) {
     const taskId = task.taskId.toUpperCase();
-    const matches = await resolveBranchNameForTaskId(taskId, remoteBranches);
+    const matches = await resolveBranchNameForTaskId(taskId, remoteBranches, branchPrefix);
     let branchName;
 
     if (matches.length === 1) {
@@ -234,7 +237,7 @@ async function resolveTasksToBranches(tasks) {
       ]);
       branchName = chosen;
     } else {
-      branchName = `feature/${taskId.toLowerCase()}`;
+      branchName = `${branchPrefix.feature || 'feature/'}${taskId.toLowerCase()}`;
       logger.warn(`No remote branch found matching ${taskId}; guessing ${branchName} (may not exist)`);
     }
 
