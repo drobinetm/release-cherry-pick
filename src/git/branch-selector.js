@@ -4,13 +4,23 @@ const inquirer = require('inquirer');
 const simpleGit = require('simple-git');
 const logger = require('../utils/logger');
 const { searchableCheckbox } = require('../utils/prompts');
+const { defaultConfig } = require('../config/defaults');
 
 const git = simpleGit();
 
-async function selectBranchesInteractively() {
+// Prefixes of the branches a release can be cut from (every configured prefix except release)
+// (falls back to the defaults when none are configured).
+function getSourcePrefixes(branchPrefix) {
+  const prefixes = Object.entries(branchPrefix || {})
+    .filter(([type, prefix]) => type !== 'release' && prefix)
+    .map(([, prefix]) => prefix);
+  return prefixes.length > 0 ? prefixes : getSourcePrefixes(defaultConfig.git.branchPrefix);
+}
+
+async function selectBranchesInteractively(branchPrefix) {
   logger.header('Branch Selection');
 
-  const branches = await getRemoteBranches();
+  const branches = await getRemoteBranches(branchPrefix);
 
   if (branches.length === 0) {
     logger.warn('No feature or hotfix branches found');
@@ -28,13 +38,15 @@ async function selectBranchesInteractively() {
   return selectedBranches;
 }
 
-async function getRemoteBranches() {
+async function getRemoteBranches(branchPrefix) {
+  const prefixes = getSourcePrefixes(branchPrefix);
   try {
     await git.fetch();
     const result = await git.branch(['-r']);
     const branches = result.all
-      .filter(branch => branch.includes('origin/feature/') || branch.includes('origin/hotfix/'))
+      .filter(branch => branch.startsWith('origin/'))
       .map(branch => branch.replace('origin/', ''))
+      .filter(branch => prefixes.some(prefix => branch.startsWith(prefix)))
       .sort();
 
     return branches;
@@ -50,14 +62,15 @@ function escapeRegex(string) {
 
 // Finds real remote branch(es) whose feature/hotfix name starts with the given task ID
 // (case-insensitive), e.g. taskId "PB-I3245" matches "hotfix/PB-I3245-favicon-incorrect-payments".
-async function resolveBranchNameForTaskId(taskId, branches = null) {
-  const list = branches || (await getRemoteBranches());
-  const re = new RegExp(`^(feature|hotfix)/${escapeRegex(taskId)}(?:[-_]|$)`, 'i');
+async function resolveBranchNameForTaskId(taskId, branches = null, branchPrefix) {
+  const list = branches || (await getRemoteBranches(branchPrefix));
+  const prefixes = getSourcePrefixes(branchPrefix).map(escapeRegex).join('|');
+  const re = new RegExp(`^(?:${prefixes})${escapeRegex(taskId)}(?:[-_]|$)`, 'i');
   return list.filter(branch => re.test(branch));
 }
 
-async function searchBranches(searchTerm) {
-  const branches = await getRemoteBranches();
+async function searchBranches(searchTerm, branchPrefix) {
+  const branches = await getRemoteBranches(branchPrefix);
   return branches.filter(branch => 
     branch.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -69,12 +82,13 @@ async function validateBranchExists(branchName) {
     return result.all.some(branch => 
       branch === `origin/${branchName}` || branch === branchName
     );
-  } catch (error) {
+  } catch {
     return false;
   }
 }
 
 module.exports = {
+  getSourcePrefixes,
   selectBranchesInteractively,
   getRemoteBranches,
   resolveBranchNameForTaskId,

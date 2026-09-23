@@ -66,7 +66,7 @@ This project uses release-cherry-pick CLI tool for automating release processes.
 
 ## Configuration
 
-The tool uses \`.release-cherry-pick.json\` for configuration.
+The tool keeps its configuration outside the project, in \`~/.release-cherry-pick/<project>.json\` (it may contain API keys).
 See \`src/config/defaults.js\` for default values.
 
 ## Commands

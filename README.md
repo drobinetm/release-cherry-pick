@@ -24,8 +24,8 @@ Given a list of task IDs (from a file, a `-b` flag, or interactive branch select
 2. **Authenticates to GitLab** with a personal access token (`gitlab.token` in config, or the `GITLAB_TOKEN` env var), prompting for one if missing and validating it against `GET /user`.
 3. **Cherry-picks only that task's own commits** onto the release branch — matched by the team's `[TASK-ID] description` commit message convention (not a naive branch diff, which breaks when a branch wasn't cut from a recent `staging`).
 4. **Drafts the MR title and description with Anthropic Claude** from the picked commits, falling back to a static template if AI is disabled or fails.
-5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting whichever member matches your configured default reviewer pattern.
-6. **Creates the MR** with squash-commits and delete-source-branch checked by default.
+5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting your configured default reviewers.
+6. **Creates the MR** with squash-commits and delete-source-branch checked by default, assigned to your configured default assignees.
 7. **Never auto-resolves problems for you**: if cherry-picking conflicts, or the release branch already exists remotely, it stops touching that branch immediately and reports it — you decide manually. Branches whose changes are already present get reported as `SKIPPED`, not silently pushed.
 8. **Produces a final report** (console + `release-summary.md`) showing exactly which branches shipped, which need manual conflict resolution, which were skipped, and the MR link for each.
 
@@ -53,9 +53,12 @@ node src/index.js release
 # From a branch-list file
 node src/index.js release --file branches.txt
 
-# Direct — comma-separated branch names
+# Direct — comma-separated task IDs and/or full branch names
+node src/index.js release --branches PB-123,PB-124
 node src/index.js release --branches feature/PB-123-list-user,hotfix/PB-124-fix-favicon
 ```
+
+A bare task ID is resolved to its real remote branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
 
 ### Configure
 
@@ -78,7 +81,7 @@ The tool resolves each task ID to its real remote branch automatically (asking y
 
 ### Configuration file
 
-Written to `.release-cherry-pick.json` in the project root you run the tool from:
+Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **never stored inside the project**. It lives in your home directory, one file per project: `~/.release-cherry-pick/<project>.json` (e.g. `C:\Users\<you>\.release-cherry-pick\gitlab.example.com_group_project.json`). The file name comes from the `origin` remote (host + project path), so it's the same whether you cloned over SSH or HTTPS and doesn't change if you move the folder; repos without a remote use the folder name plus a short hash of its path. `config --show` prints the file's location. On Linux/macOS the file is created readable by your user only. Set `RELEASE_CHERRY_PICK_CONFIG_DIR` to use another directory.
 
 ```json
 {
@@ -95,25 +98,31 @@ Written to `.release-cherry-pick.json` in the project root you run the tool from
     "token": ""
   },
   "ai": {
-    "enabled": false,
-    "provider": "anthropic",
+    "enabled": true,
+    "provider": "",
     "apiKey": "",
-    "model": "claude-haiku-4-5-20251001",
-    "baseURL": "https://api.anthropic.com/v1"
+    "model": "",
+    "baseURL": ""
   },
   "release": {
     "autoCreateMR": true,
     "mrTitleFormat": "[{taskId}] {description}",
+    "defaultReviewers": [],
     "defaultAssignees": [],
     "mrSquash": true,
     "mrRemoveSourceBranch": true,
-    "defaultReviewerPattern": "^che(i|y)ner$",
     "branches": []
   }
 }
 ```
 
-GitLab authentication uses a personal access token stored in `gitlab.token` (or the `GITLAB_TOKEN` environment variable, which takes effect when the config value is empty). `gitlab.host` is only needed for a self-managed instance (leave blank for gitlab.com). The project path is resolved from the `origin` remote URL — no `projectId` is stored. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
+`ai.provider`/`ai.model` are empty by default: with AI enabled and no model saved, `release` asks you to pick a provider and model once and saves them. `ai.baseURL` is empty too, so each provider uses its own API endpoint unless you override it. `config --show` masks `gitlab.token` and `ai.apiKey` (e.g. `glpat-****WxYz`, `sk-ant-****9z8y`), and the wizard hides both while you type them.
+
+Any option missing from the file is filled in from these defaults when it's loaded, so config files written by older versions keep working; the merged result is validated up front, and every problem (wrong type, invalid value) is reported in a single clear error.
+
+`config --init` asks for every option above. When `autoCreateMR` is on, it uses the GitLab token (the one just entered, or `GITLAB_TOKEN`) to list the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. If there's no token yet or the API call fails, it falls back to typing comma-separated usernames. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
+
+GitLab authentication uses a personal access token stored in `gitlab.token` (or the `GITLAB_TOKEN` environment variable, which takes effect when the config value is empty). The GitLab host and project path are both resolved from the `origin` remote URL (SSH `git@host:group/proj.git`, `ssh://…`, or HTTPS, with or without credentials) — no `projectId` is stored. Set `gitlab.host` only when the remote's host isn't the GitLab web host, e.g. an SSH alias from `~/.ssh/config`. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
 
 ## Testing in development
 
@@ -127,7 +136,23 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    ```bash
    find src -name "*.js" -exec node --check {} \;
    ```
-3. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
+3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
+   ```bash
+   npm run sandbox:create                                  # (re)creates it in $TMPDIR/release-cherry-pick-sandbox
+   npm run sandbox:run -- -b "PB-100,hotfix/PB-I200-favicon,PB-300,PB-400,PB-500,feature/refactor"
+   npm run sandbox:run -- -f tasks.txt                     # --file path (tasks.txt lives in the sandbox)
+   npm run sandbox:run                                     # interactive-selection path
+   ```
+   `sandbox:run` auto-answers every prompt (list → first choice, checkbox → the checked choices or all if none are, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
+
+   Two more flags work with both `sandbox:run` and `sandbox:config` (the setup wizard, whose prompts default to their current values):
+   - `--fake-gitlab` intercepts `fetch()` calls to the GitLab REST API (`/user`, project members, `POST merge_requests` — which prints the request body it received and returns a fake URL) and sets a fake `GITLAB_TOKEN`, so the real client, member-selection and MR-creation code run end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
+   - `--answer name=value` forces the answer of a prompt by name (value parsed as JSON when possible).
+   ```bash
+   npm run sandbox:config -- --fake-gitlab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'
+   npm run sandbox:run -- --fake-gitlab -b "PB-100,PB-300"   # shows the MR request body, incl. reviewer_ids/assignee_ids
+   ```
+4. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
    ```bash
    git clone --mirror <path-or-url-to-target-repo> /tmp/rcp-test/mirror.git
    git clone /tmp/rcp-test/mirror.git /tmp/rcp-test/work
@@ -135,7 +160,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    # run release-cherry-pick's functions/CLI here — origin points only at the local mirror
    ```
    This gives you real branches, real commit history, and real conflict scenarios with zero risk to the actual GitLab project.
-4. **GitLab API behavior** (token validation, listing reviewers, MR creation) and **AI generation** need a real token (PAT with `api` scope) and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
+5. **GitLab API behavior** (token validation, listing reviewers, MR creation) and **AI generation** need a real token (PAT with `api` scope) and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
 
 ## Developers
 

@@ -5,6 +5,16 @@ const logger = require('../utils/logger');
 class ReleaseStatus {
   constructor() {
     this.results = [];
+    // Warnings recorded while a task is processed, attached to its result when it's marked
+    this.pendingNotes = new Map();
+  }
+
+  // e.g. commits that mention the task ID without following the "[TASK-ID] ..." convention
+  addNote(taskId, note) {
+    if (!this.pendingNotes.has(taskId)) {
+      this.pendingNotes.set(taskId, []);
+    }
+    this.pendingNotes.get(taskId).push(note);
   }
 
   addResult(taskId, branch, status, details = {}) {
@@ -15,16 +25,19 @@ class ReleaseStatus {
       mrLink: details.mrLink || null,
       conflicts: details.conflicts || [],
       reason: details.reason || null,
+      notes: this.pendingNotes.get(taskId) || [],
       timestamp: new Date().toISOString()
     });
+    this.pendingNotes.delete(taskId);
   }
 
   markProcede(taskId, branch, mrLink = null) {
     this.addResult(taskId, branch, 'PROCEDE', { mrLink });
   }
 
-  markNoProcede(taskId, branch, conflicts = []) {
-    this.addResult(taskId, branch, 'NO PROCEDE', { conflicts });
+  // reasons: why the branch couldn't be processed (e.g. release branch already exists, git error)
+  markNoProcede(taskId, branch, reasons = []) {
+    this.addResult(taskId, branch, 'NO PROCEDE', { reason: reasons.join('; ') || null });
   }
 
   markConflict(taskId, branch, conflicts = []) {
@@ -84,8 +97,12 @@ class ReleaseStatus {
         console.log(`  Needs manual resolution. Conflicting files: ${result.conflicts.join(', ')}`);
       } else if (result.status === 'SKIPPED') {
         console.log(`  ${result.reason || 'Nothing to release — no action needed.'}`);
-      } else if (result.conflicts.length > 0) {
-        console.log(`  Conflicts: ${result.conflicts.join(', ')}`);
+      } else if (result.status === 'NO PROCEDE' && result.reason) {
+        console.log(`  Reason: ${result.reason}`);
+      }
+
+      for (const note of result.notes) {
+        console.log(`  ⚠ ${note}`);
       }
     }
 

@@ -15,18 +15,22 @@ const defaultConfig = {
   },
   ai: {
     enabled: true,
-    provider: 'anthropic',
+    // Left empty on purpose: when AI is enabled and no provider/model is saved, ensureAiSettings
+    // asks for them at release time. baseURL stays empty too, so each provider resolves its own
+    // endpoint (resolveBaseURL prefers config.ai.baseURL, which would otherwise win for any provider).
+    provider: '',
     apiKey: '',
-    model: 'claude-haiku-4-5-20251001',
-    baseURL: 'https://api.anthropic.com/v1'
+    model: '',
+    baseURL: ''
   },
   release: {
     autoCreateMR: true,
     mrTitleFormat: '[{taskId}] {description}',
+    // GitLab usernames, picked from the real project members in the setup wizard
+    defaultReviewers: [],
     defaultAssignees: [],
     mrSquash: true,
     mrRemoveSourceBranch: true,
-    defaultReviewerPattern: '^che(i|y)ner$',
     branches: []
   }
 };

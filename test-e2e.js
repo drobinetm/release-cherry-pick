@@ -1,6 +1,6 @@
 'use strict';
 
-const { parseBranchListFile, parseBranchLine, getBranchNameFromTaskId } = require('./src/git/branch-parser');
+const { parseBranchLine, getBranchNameFromTaskId } = require('./src/git/branch-parser');
 const ReleaseStatus = require('./src/git/release-status');
 const { generateMarkdownSummary } = require('./src/report/summary');
 const { generateAgentsContent } = require('./src/doc/agents-generator');
@@ -30,7 +30,7 @@ console.log('✓ Configuration defaults passed\n');
 console.log('Test 3: Release status tracking');
 const status = new ReleaseStatus();
 status.markProcede('PB-I3217', 'release/pb-i3217', 'https://gitlab.example.com/mr/1');
-status.markNoProcede('PB-I3219', 'release/pb-i3219', ['file1.js', 'file2.js']);
+status.markNoProcede('PB-I3219', 'release/pb-i3219', ['Release branch release/pb-i3219 already exists on origin']);
 const summary = status.getSummary();
 console.log('Total:', summary.total);
 console.log('PROCEDE:', summary.procede);

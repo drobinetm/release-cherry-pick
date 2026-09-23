@@ -5,46 +5,112 @@ const simpleGit = require('simple-git');
 const logger = require('../utils/logger');
 const { GitLabError } = require('../utils/errors');
 const { saveConfig } = require('../config/loader');
+const { parseRemoteUrl } = require('../git/remote-url');
 
 const git = simpleGit();
 const DEFAULT_HOST = 'gitlab.com';
-
-function getApiBase(config) {
-  const host = (config.gitlab && config.gitlab.host) || DEFAULT_HOST;
-  const trimmed = String(host).trim().replace(/\/+$/, '');
-  const origin = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  return `${origin}/api/v4`;
-}
 
 function getToken(config) {
   return (config.gitlab && config.gitlab.token) || process.env.GITLAB_TOKEN || '';
 }
 
-// Resolves the project path (e.g. "group/sub/proj") from the `origin` remote URL,
-// URL-encoding it for use as `:id` in GitLab API paths.
-async function getProjectPathId() {
+// Reads and parses the `origin` remote (once per run; it doesn't change during a release).
+let originRemotePromise = null;
+function getOriginRemote() {
+  if (!originRemotePromise) {
+    originRemotePromise = (async () => {
+      let url;
+      try {
+        url = (await git.raw(['remote', 'get-url', 'origin'])).trim();
+      } catch (error) {
+        throw new GitLabError(`Could not read git remote "origin": ${error.message}`);
+      }
+      const remote = parseRemoteUrl(url);
+      if (!remote || !remote.projectPath) {
+        throw new GitLabError(`Could not derive the GitLab project from the origin remote: ${url}`);
+      }
+      return { url, ...remote };
+    })();
+    originRemotePromise.catch(() => { originRemotePromise = null; });
+  }
+  return originRemotePromise;
+}
+
+// Turns whatever was configured as gitlab.host into the GitLab base URL ("https://host[:port]" plus
+// a relative URL root if GitLab is installed under a sub-path, e.g. "https://example.com/gitlab").
+// People often paste a project or page URL instead of the host, e.g.
+// "https://gitlab.example.com/group/proj/-/project_members", which would put the API under the
+// project path and 404; so everything from GitLab's "/-/" page separator on is dropped, and so is
+// the origin remote's project path when the value ends with it.
+async function normalizeGitlabHost(host) {
+  let value = String(host || '').trim();
+  if (!value) {
+    return '';
+  }
+  if (!/^https?:\/\//i.test(value)) {
+    value = `https://${value}`;
+  }
+
   let url;
   try {
-    url = (await git.raw(['remote', 'get-url', 'origin'])).trim();
-  } catch (error) {
-    throw new GitLabError(`Could not read git remote "origin": ${error.message}`);
+    url = new URL(value);
+  } catch {
+    return value.replace(/\/+$/, '');
   }
 
-  let projectPath;
-  if (url.includes(':')) {
-    // SCP-like: git@host:group/proj.git
-    projectPath = url.slice(url.indexOf(':') + 1);
+  let pathname = url.pathname.replace(/\/-(\/.*)?$/, '').replace(/\/+$/, '').replace(/\.git$/, '');
+  try {
+    const { projectPath } = await getOriginRemote();
+    if (pathname.toLowerCase().endsWith(`/${projectPath}`.toLowerCase())) {
+      pathname = pathname.slice(0, pathname.length - projectPath.length - 1);
+    }
+  } catch {
+    // No usable origin remote: keep the path (it may be a relative URL root)
+  }
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
+let warnedAboutHost = false;
+
+// API base URL: gitlab.host from config when set (needed e.g. when the SSH remote uses a
+// ~/.ssh/config alias instead of the real host), otherwise the host of the origin remote, so a
+// self-managed instance works without configuring anything; gitlab.com as a last resort.
+async function getApiBase(config) {
+  const configured = config.gitlab && config.gitlab.host;
+  let base;
+  if (configured) {
+    base = await normalizeGitlabHost(configured);
+    const asGiven = String(configured).trim().replace(/\/+$/, '');
+    if (!warnedAboutHost && base !== asGiven && base !== `https://${asGiven}`) {
+      warnedAboutHost = true;
+      logger.warn(`gitlab.host "${configured}" looks like a project/page URL; using ${base} (run config --init to fix it, or leave it blank to use the origin remote's host)`);
+    }
   } else {
     try {
-      projectPath = new URL(url).pathname;
+      const remote = await getOriginRemote();
+      base = `${remote.protocol}://${remote.host}`;
     } catch {
-      throw new GitLabError(`Could not parse origin remote URL: ${url}`);
+      base = `https://${DEFAULT_HOST}`;
     }
   }
+  return `${base}/api/v4`;
+}
 
-  projectPath = projectPath.replace(/^\/+/, '').replace(/\.git$/, '');
-  if (!projectPath) {
-    throw new GitLabError(`Could not derive project path from origin remote: ${url}`);
+// Project path (e.g. "group/sub/proj") from the `origin` remote, URL-encoded for use as `:id`.
+// If gitlab.host includes a relative URL root (GitLab served under e.g. https://example.com/gitlab),
+// the remote's path starts with it ("gitlab/group/proj"), and it isn't part of the project path.
+async function getProjectPathId(config) {
+  let { projectPath } = await getOriginRemote();
+  const configured = config && config.gitlab && config.gitlab.host;
+  if (configured) {
+    try {
+      const root = new URL(await normalizeGitlabHost(configured)).pathname.replace(/^\/+|\/+$/g, '');
+      if (root && projectPath.toLowerCase().startsWith(`${root.toLowerCase()}/`)) {
+        projectPath = projectPath.slice(root.length + 1);
+      }
+    } catch {
+      // Unparseable host: keep the remote's path as-is
+    }
   }
   return encodeURIComponent(projectPath);
 }
@@ -57,7 +123,7 @@ async function apiRequest(config, path, { method = 'GET', body } = {}) {
     );
   }
 
-  const base = getApiBase(config);
+  const base = await getApiBase(config);
   let response;
   try {
     response = await fetch(`${base}${path}`, {
@@ -81,7 +147,10 @@ async function apiRequest(config, path, { method = 'GET', body } = {}) {
     throw new GitLabError(`GitLab permission denied (403): ${text.slice(0, 300)}`);
   }
   if (response.status === 404) {
-    throw new GitLabError('GitLab resource not found (404): check gitlab.host, origin remote, and token access');
+    // GitLab also answers 404 (not 403) for projects the token can't see
+    throw new GitLabError(
+      `GitLab resource not found (404) at ${base}${path.split('?')[0]}: check gitlab.host, the origin remote, and that the token's user can access the project`
+    );
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -111,7 +180,7 @@ async function ensureAuthenticated(config) {
     logger.warn('No GitLab token found (gitlab.token / GITLAB_TOKEN)');
     const { enteredToken } = await inquirer.prompt([
       {
-        type: 'input',
+        type: 'password',
         name: 'enteredToken',
         message: 'GitLab personal access token (scope "api"), leave blank to abort:',
         mask: '*',
@@ -147,7 +216,7 @@ async function ensureAuthenticated(config) {
 
 async function getProjectMembers(config) {
   try {
-    const projectId = await getProjectPathId();
+    const projectId = await getProjectPathId(config);
     const members = [];
     let page = 1;
 
@@ -178,29 +247,37 @@ async function getProjectMembers(config) {
   }
 }
 
+// Maps usernames to GitLab user IDs (the MR API takes IDs), warning about and skipping unknown ones.
+function usernamesToIds(usernames, memberList, role) {
+  const ids = [];
+  const missing = [];
+  for (const username of usernames) {
+    const match = memberList.find((m) => m.username.toLowerCase() === username.toLowerCase());
+    if (match) {
+      ids.push(match.id);
+    } else {
+      missing.push(username);
+    }
+  }
+  if (missing.length > 0) {
+    logger.warn(`${role}(s) not found in project members (skipped): ${missing.join(', ')}`);
+  }
+  return ids;
+}
+
 async function createMergeRequest(
   config,
-  { sourceBranch, targetBranch, title, description, reviewers = [], squash = true, removeSourceBranch = true, members = null }
+  { sourceBranch, targetBranch, title, description, reviewers = [], assignees = [], squash = true, removeSourceBranch = true, members = null }
 ) {
   try {
-    const projectId = await getProjectPathId();
+    const projectId = await getProjectPathId(config);
 
-    let reviewerIds = [];
-    if (reviewers.length > 0) {
-      const memberList = members || (await getProjectMembers(config));
-      reviewerIds = reviewers
-        .map((username) => {
-          const match = memberList.find((m) => m.username === username);
-          return match ? match.id : null;
-        })
-        .filter((id) => id !== null);
-      const missing = reviewers.filter(
-        (username) => !memberList.some((m) => m.username === username)
-      );
-      if (missing.length > 0) {
-        logger.warn(`Reviewer(s) not found in project members (skipped): ${missing.join(', ')}`);
-      }
+    let memberList = members;
+    if (!memberList && (reviewers.length > 0 || assignees.length > 0)) {
+      memberList = await getProjectMembers(config);
     }
+    const reviewerIds = reviewers.length > 0 ? usernamesToIds(reviewers, memberList, 'Reviewer') : [];
+    const assigneeIds = assignees.length > 0 ? usernamesToIds(assignees, memberList, 'Assignee') : [];
 
     const body = {
       source_branch: sourceBranch,
@@ -212,6 +289,9 @@ async function createMergeRequest(
     };
     if (reviewerIds.length > 0) {
       body.reviewer_ids = reviewerIds;
+    }
+    if (assigneeIds.length > 0) {
+      body.assignee_ids = assigneeIds;
     }
 
     const mr = await apiRequest(config, `/projects/${projectId}/merge_requests`, {
@@ -238,5 +318,7 @@ module.exports = {
   getProjectMembers,
   createMergeRequest,
   getApiBase,
-  getToken
+  getToken,
+  parseRemoteUrl,
+  normalizeGitlabHost
 };

@@ -2,9 +2,11 @@
 
 const inquirer = require('inquirer');
 const { searchableList } = require('../utils/prompts');
-const { loadConfig, saveConfig } = require('./loader');
+const { loadConfig, saveConfig, getConfigPath } = require('./loader');
 const { getDefaultConfig } = require('./defaults');
-const { validateConfigPartial } = require('./validator');
+const { validateConfig } = require('./validator');
+const gitlab = require('../gitlab/client');
+const { findDefaultReviewers } = require('../gitlab/reviewer-selector');
 const logger = require('../utils/logger');
 const {
   DEFAULT_PROVIDER,
@@ -70,7 +72,7 @@ async function promptAiProviderAndModel(config) {
     if (!apiKey) {
       const { enteredKey } = await inquirer.prompt([
         {
-          type: 'input',
+          type: 'password',
           name: 'enteredKey',
           message: envKeyNames.length
             ? `API key for ${provider.name} (env ${envKeyNames.join(' or ')} not set):`
@@ -191,8 +193,15 @@ async function ensureAiSettings(config) {
 async function setupWizard() {
   logger.header('Configuration Setup');
 
-  const existingConfig = loadConfig();
-  const config = existingConfig || getDefaultConfig();
+  // Start from the existing config (merged with defaults) without validating it, so the wizard
+  // can also be used to repair an invalid file.
+  let config;
+  try {
+    config = loadConfig({ validate: false }) || getDefaultConfig();
+  } catch (error) {
+    logger.warn(`${error.message}\nStarting from the default configuration instead.`);
+    config = getDefaultConfig();
+  }
   if (!config.release || !Array.isArray(config.release.branches)) {
     config.release = { ...(config.release || {}), branches: [] };
   }
@@ -228,11 +237,13 @@ async function setupWizard() {
     {
       type: 'input',
       name: 'gitlabHost',
-      message: 'GitLab hostname (leave blank for gitlab.com):',
-      default: config.gitlab.host
+      message: 'GitLab hostname, e.g. gitlab.example.com (leave blank to use the host of the origin remote):',
+      default: config.gitlab.host,
+      // Keeps only the host if a project/page URL is pasted (see normalizeGitlabHost)
+      filter: (value) => gitlab.normalizeGitlabHost(value)
     },
     {
-      type: 'input',
+      type: 'password',
       name: 'gitlabToken',
       message: 'GitLab personal access token, scope "api" (leave blank to keep current / use GITLAB_TOKEN env):',
       mask: '*',
@@ -246,6 +257,33 @@ async function setupWizard() {
       name: 'aiEnabled',
       message: 'Enable AI for MR titles/descriptions?',
       default: config.ai.enabled
+    },
+    {
+      type: 'confirm',
+      name: 'autoCreateMR',
+      message: 'Push release branches and create GitLab MRs automatically? (no = only prepare branches locally)',
+      default: config.release.autoCreateMR
+    },
+    {
+      type: 'input',
+      name: 'mrTitleFormat',
+      message: 'MR title template when AI is off ({taskId} and {description} are replaced):',
+      when: (answers) => answers.autoCreateMR,
+      default: config.release.mrTitleFormat
+    },
+    {
+      type: 'confirm',
+      name: 'mrSquash',
+      message: 'Check "Squash commits" on created MRs?',
+      when: (answers) => answers.autoCreateMR,
+      default: config.release.mrSquash
+    },
+    {
+      type: 'confirm',
+      name: 'mrRemoveSourceBranch',
+      message: 'Check "Delete source branch" on created MRs?',
+      when: (answers) => answers.autoCreateMR,
+      default: config.release.mrRemoveSourceBranch
     }
   ];
 
@@ -285,9 +323,18 @@ async function setupWizard() {
           baseURL: config.ai.baseURL || ''
         },
     release: {
-      ...config.release
+      ...config.release,
+      autoCreateMR: answers.autoCreateMR
     }
   };
+
+  if (answers.autoCreateMR) {
+    newConfig.release.mrTitleFormat = answers.mrTitleFormat;
+    newConfig.release.mrSquash = answers.mrSquash;
+    newConfig.release.mrRemoveSourceBranch = answers.mrRemoveSourceBranch;
+
+    await selectDefaultMembers(newConfig);
+  }
 
   const { reviewAction } = await inquirer.prompt([
     {
@@ -310,18 +357,103 @@ async function setupWizard() {
 
   if (reviewAction === 'cancel') {
     logger.warn('Configuration setup cancelled; no changes were saved');
-    return existingConfig;
+    return config;
   }
 
   try {
-    validateConfigPartial(newConfig);
+    validateConfig(newConfig);
     saveConfig(newConfig);
-    logger.success('Configuration saved successfully!');
+    logger.success(`Configuration saved to ${getConfigPath()}`);
     return newConfig;
   } catch (error) {
     logger.error(error.message);
     return null;
   }
+}
+
+// Sets release.defaultReviewers / release.defaultAssignees, picking from the real GitLab project
+// members (REST API, with the token just configured) when possible, or typed usernames otherwise.
+async function selectDefaultMembers(config) {
+  const release = config.release;
+  const members = await fetchProjectMembers(config);
+
+  if (members) {
+    const reviewerDefaults = findDefaultReviewers(members, release).map(m => m.username);
+    release.defaultReviewers = await pickMembers(
+      'defaultReviewers',
+      members,
+      reviewerDefaults,
+      release.defaultReviewers,
+      'Default MR reviewer(s) (preselected in each MR\'s reviewer prompt):'
+    );
+    release.defaultAssignees = await pickMembers(
+      'defaultAssignees',
+      members,
+      release.defaultAssignees,
+      release.defaultAssignees,
+      'Default MR assignee(s) (assigned automatically to every MR):'
+    );
+  } else {
+    release.defaultReviewers = await askUsernames('defaultReviewers', 'Default MR reviewer usernames (comma-separated, blank for none):', release.defaultReviewers);
+    release.defaultAssignees = await askUsernames('defaultAssignees', 'Default MR assignee usernames (comma-separated, blank for none):', release.defaultAssignees);
+  }
+
+  // Reviewers are now an explicit list; the legacy regex has been migrated into it
+  delete release.defaultReviewerPattern;
+}
+
+async function fetchProjectMembers(config) {
+  // Not gitlab.ensureAuthenticated(): it prompts for a token and saves the config to disk, which
+  // would bypass the wizard's review/cancel step. Without a token, fall back to typed usernames.
+  if (!gitlab.getToken(config)) {
+    logger.warn('No GitLab token configured (gitlab.token / GITLAB_TOKEN), so project members can\'t be listed; enter usernames manually instead.');
+    return null;
+  }
+
+  try {
+    logger.info('Loading GitLab project members...');
+    const members = await gitlab.getProjectMembers(config);
+    if (members.length === 0) {
+      logger.warn('The GitLab project has no members to choose from; enter usernames manually instead.');
+      return null;
+    }
+    return members;
+  } catch (error) {
+    logger.warn(`Could not load GitLab project members (${error.message}); enter usernames manually instead.`);
+    return null;
+  }
+}
+
+async function pickMembers(name, members, checkedUsernames, configuredUsernames, message) {
+  const checked = new Set(checkedUsernames.map(u => u.toLowerCase()));
+  const choices = members.map(m => ({
+    name: `${m.name} (@${m.username})`,
+    value: m.username,
+    checked: checked.has(m.username.toLowerCase())
+  }));
+
+  // Keep previously configured usernames that are no longer project members visible, so they
+  // aren't dropped silently — the user decides whether to keep them.
+  for (const username of configuredUsernames) {
+    if (!members.some(m => m.username.toLowerCase() === username.toLowerCase())) {
+      choices.push({ name: `@${username} (not found among project members)`, value: username, checked: true });
+    }
+  }
+
+  const answers = await inquirer.prompt([
+    { type: 'checkbox', name, message, pageSize: 15, choices }
+  ]);
+  return answers[name];
+}
+
+async function askUsernames(name, message, current) {
+  const answers = await inquirer.prompt([
+    { type: 'input', name, message, default: current.join(', ') }
+  ]);
+  return String(answers[name])
+    .split(',')
+    .map(u => u.trim().replace(/^@/, ''))
+    .filter(Boolean);
 }
 
 module.exports = {

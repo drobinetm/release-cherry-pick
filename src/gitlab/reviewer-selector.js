@@ -3,21 +3,34 @@
 const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 
-function findDefaultReviewer(members, pattern) {
-  const re = new RegExp(pattern, 'i');
-  return members.find((m) => re.test(m.username));
+// Members to preselect as reviewers: those listed in release.defaultReviewers or, if that list is
+// empty, those matching the legacy release.defaultReviewerPattern regex (older config files).
+function findDefaultReviewers(members, { defaultReviewers = [], defaultReviewerPattern } = {}) {
+  if (defaultReviewers.length > 0) {
+    const wanted = new Set(defaultReviewers.map(u => u.toLowerCase()));
+    return members.filter(m => wanted.has(m.username.toLowerCase()));
+  }
+  if (defaultReviewerPattern) {
+    const re = new RegExp(defaultReviewerPattern, 'i');
+    return members.filter(m => re.test(m.username));
+  }
+  return [];
 }
 
-async function selectReviewer(members, defaultPattern = '^che(i|y)ner$') {
+async function selectReviewer(members, releaseConfig = {}) {
   if (members.length === 0) {
     logger.warn('No GitLab project members found');
     return [];
   }
 
-  const defaultMember = findDefaultReviewer(members, defaultPattern);
-  if (!defaultMember) {
-    logger.warn('No project member matching "cheiner"/"cheyner" found; no default reviewer preselected');
+  const defaults = findDefaultReviewers(members, releaseConfig);
+  const missing = (releaseConfig.defaultReviewers || []).filter(
+    u => !members.some(m => m.username.toLowerCase() === u.toLowerCase())
+  );
+  if (missing.length > 0) {
+    logger.warn(`Default reviewer(s) not found among project members: ${missing.join(', ')}`);
   }
+  const defaultUsernames = new Set(defaults.map(m => m.username));
 
   const { reviewerUsernames } = await inquirer.prompt([
     {
@@ -28,7 +41,7 @@ async function selectReviewer(members, defaultPattern = '^che(i|y)ner$') {
       choices: members.map((m) => ({
         name: `${m.name} (@${m.username})`,
         value: m.username,
-        checked: !!defaultMember && m.username === defaultMember.username
+        checked: defaultUsernames.has(m.username)
       }))
     }
   ]);
@@ -36,4 +49,4 @@ async function selectReviewer(members, defaultPattern = '^che(i|y)ner$') {
   return reviewerUsernames;
 }
 
-module.exports = { findDefaultReviewer, selectReviewer };
+module.exports = { findDefaultReviewers, selectReviewer };

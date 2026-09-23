@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const logger = require('../utils/logger');
 
 function generateSummary(releaseStatus, outputPath = null) {
@@ -22,7 +21,8 @@ function generateSummary(releaseStatus, outputPath = null) {
       status: r.status,
       mrLink: r.mrLink,
       conflicts: r.conflicts,
-      reason: r.reason
+      reason: r.reason,
+      notes: r.notes
     }))
   };
 
@@ -70,8 +70,12 @@ function generateMarkdownSummary(releaseStatus) {
       markdown += `- **Conflicting files:** ${result.conflicts.join(', ')}\n`;
     } else if (result.status === 'SKIPPED') {
       markdown += `- **${result.reason || 'Nothing to release — no action needed.'}**\n`;
-    } else if (result.conflicts.length > 0) {
-      markdown += `- **Conflicts:** ${result.conflicts.join(', ')}\n`;
+    } else if (result.status === 'NO PROCEDE' && result.reason) {
+      markdown += `- **Reason:** ${result.reason}\n`;
+    }
+
+    for (const note of result.notes || []) {
+      markdown += `- ⚠️ ${note}\n`;
     }
 
     markdown += `\n`;

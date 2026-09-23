@@ -10,6 +10,9 @@
     "start": "node src/index.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "sandbox:create": "bash scripts/sandbox/make-sandbox.sh",
+    "sandbox:run": "node scripts/sandbox/run-release.js",
+    "sandbox:config": "node scripts/sandbox/run-config.js",
     "prepare": "husky"
   },
   "lint-staged": {
