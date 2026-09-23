@@ -6,7 +6,7 @@ const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 const { loadConfig, configExists } = require('../config/loader');
 const { setupWizard } = require('../config/setup');
-const { parseBranchListFile, extractTaskIdFromBranch, isTaskId } = require('../git/branch-parser');
+const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { cherryPickCommits } = require('../git/cherry-pick');
@@ -71,7 +71,7 @@ async function runRelease(options = {}) {
     const entries = options.branches.split(',').map(b => b.trim()).filter(Boolean);
     const taskIds = entries.filter(isTaskId);
     const resolved = await resolveTasksToBranches(
-      taskIds.map(taskId => ({ taskId, description: taskId })),
+      taskIds.map(taskId => ({ taskId })),
       config.git.branchPrefix
     );
 
@@ -208,7 +208,8 @@ async function runRelease(options = {}) {
   logger.success('Release process completed');
 }
 
-// Resolves each { taskId, description } to its real remote branch; prompts when several match.
+// Resolves each { taskId, description? } to its real remote branch; prompts when several match.
+// Tasks without a description (bare IDs from -b) get one derived from the resolved branch name.
 async function resolveTasksToBranches(tasks, branchPrefix = {}) {
   if (tasks.length === 0) {
     return [];
@@ -241,7 +242,8 @@ async function resolveTasksToBranches(tasks, branchPrefix = {}) {
       logger.warn(`No remote branch found matching ${taskId}; guessing ${branchName} (may not exist)`);
     }
 
-    branches.push({ taskId, description: task.description, branchName });
+    const description = task.description || describeBranch(branchName, branchPrefix);
+    branches.push({ taskId, description, branchName });
   }
 
   return branches;
@@ -254,7 +256,7 @@ function branchInfoFromName(branchName, config) {
     logger.warn(`Could not extract a task ID from ${branchName} — skipping it`);
     return null;
   }
-  return { taskId, description: branchName, branchName };
+  return { taskId, description: describeBranch(branchName, config.git.branchPrefix), branchName };
 }
 
 module.exports = { runRelease };
