@@ -1,17 +1,58 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { ConfigError } = require('../utils/errors');
-const logger = require('../utils/logger');
+const { parseRemoteUrl } = require('../git/remote-url');
 const { getDefaultConfig } = require('./defaults');
 const { validateConfig } = require('./validator');
 
-const CONFIG_FILE = '.release-cherry-pick.json';
+// The config can hold secrets (gitlab.token, ai.apiKey), so it lives in the developer's home
+// directory, never inside the project, where it could end up committed. One file per project.
+// RELEASE_CHERRY_PICK_CONFIG_DIR overrides the directory (used by the sandbox and tests).
+function getConfigDir() {
+  return process.env.RELEASE_CHERRY_PICK_CONFIG_DIR || path.join(os.homedir(), '.release-cherry-pick');
+}
 
+function runGit(args) {
+  try {
+    return execFileSync('git', args, { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function toFileName(value) {
+  return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '_').replace(/^[_.]+|_+$/g, '');
+}
+
+// Identifies the current project: from the origin remote (host + project path, e.g.
+// "gitlab.example.com_group_proj"), so it's unique even when two checkouts share a folder name and
+// stable if the folder is moved or renamed; without a usable remote, from the repository folder name
+// plus a short hash of its absolute path.
+function getProjectKey() {
+  const remote = parseRemoteUrl(runGit(['remote', 'get-url', 'origin']));
+  if (remote && remote.host && remote.projectPath) {
+    return toFileName(`${remote.host}_${remote.projectPath}`);
+  }
+
+  const root = path.resolve(runGit(['rev-parse', '--show-toplevel']) || process.cwd());
+  const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root;
+  const hash = crypto.createHash('sha1').update(normalizedRoot).digest('hex').slice(0, 8);
+  return `${toFileName(path.basename(root)) || 'project'}-${hash}`;
+}
+
+// Resolved once per run (per working directory): the project doesn't change during a release.
+const configPathCache = new Map();
 function getConfigPath() {
-  return path.join(process.cwd(), CONFIG_FILE);
+  const cwd = process.cwd();
+  if (!configPathCache.has(cwd)) {
+    configPathCache.set(cwd, path.join(getConfigDir(), `${getProjectKey()}.json`));
+  }
+  return configPathCache.get(cwd);
 }
 
 function isPlainObject(value) {
@@ -63,54 +104,12 @@ function saveConfig(config) {
   const configPath = getConfigPath();
 
   try {
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+    // Owner-only permissions (applied on Linux/macOS; on Windows the home folder is already private)
+    fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
+    return true;
   } catch (error) {
-    throw new ConfigError(`Error saving config file: ${error.message}`);
-  }
-
-  ensureConfigGitignored();
-  return true;
-}
-
-// The config file can hold secrets (gitlab.token, ai.apiKey) and per-developer settings, so it must
-// never be committed: make sure the project's .gitignore (next to the config file) lists it,
-// creating .gitignore if needed. Runs on every save, but only touches the file when the entry is
-// missing. Never throws — failing here must not prevent saving the config.
-function ensureConfigGitignored() {
-  const dir = path.dirname(getConfigPath());
-  const gitignorePath = path.join(dir, '.gitignore');
-
-  try {
-    const exists = fs.existsSync(gitignorePath);
-    const content = exists ? fs.readFileSync(gitignorePath, 'utf8') : '';
-    const alreadyListed = content
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .some(line => line === CONFIG_FILE || line === `/${CONFIG_FILE}`);
-
-    if (!alreadyListed) {
-      const eol = content.includes('\r\n') ? '\r\n' : '\n';
-      const separator = content === '' || content.endsWith('\n') ? '' : eol;
-      const blankLine = content.trim() === '' ? '' : eol;
-      const entry = `${separator}${blankLine}# release-cherry-pick local config (may contain API keys/tokens)${eol}${CONFIG_FILE}${eol}`;
-      fs.appendFileSync(gitignorePath, entry, 'utf8');
-      logger.info(exists
-        ? `Added ${CONFIG_FILE} to .gitignore — remember to commit the .gitignore change`
-        : `Created .gitignore with ${CONFIG_FILE} so it isn't committed`);
-    }
-  } catch (error) {
-    logger.warn(`Could not add ${CONFIG_FILE} to .gitignore (${error.message}); add it manually so API keys aren't committed`);
-    return;
-  }
-
-  // .gitignore doesn't affect files that are already tracked
-  try {
-    const tracked = execFileSync('git', ['ls-files', '--', CONFIG_FILE], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    if (tracked.trim()) {
-      logger.warn(`${CONFIG_FILE} is already committed to git, so .gitignore won't stop it from being pushed. Untrack it with \`git rm --cached ${CONFIG_FILE}\` and commit (and rotate any key it contained).`);
-    }
-  } catch {
-    // Not a git repository (or git unavailable): nothing is tracked, so nothing to warn about
+    throw new ConfigError(`Error saving config file ${configPath}: ${error.message}`);
   }
 }
 
@@ -123,6 +122,6 @@ module.exports = {
   saveConfig,
   configExists,
   getConfigPath,
-  mergeWithDefaults,
-  ensureConfigGitignored
+  getConfigDir,
+  mergeWithDefaults
 };

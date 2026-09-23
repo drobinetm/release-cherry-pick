@@ -2,10 +2,12 @@
 # Creates a disposable local sandbox to exercise release-cherry-pick without touching any real repo:
 #   origin.git  bare repo that stands in for GitLab
 #   work/       clone where the tool is run (config has autoCreateMR: false, so no push or GitLab API calls)
+#   config/     the tool's config for the sandbox project (instead of ~/.release-cherry-pick)
 # Usage: bash scripts/sandbox/make-sandbox.sh [sandbox-dir]   (default: $TMPDIR/release-cherry-pick-sandbox)
 set -e
+TOOL_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 ROOT="${1:-${TMPDIR:-/tmp}/release-cherry-pick-sandbox}"
-rm -rf "$ROOT" && mkdir -p "$ROOT" && cd "$ROOT"
+rm -rf "$ROOT" && mkdir -p "$ROOT" && ROOT="$(cd "$ROOT" && pwd)" && cd "$ROOT"
 
 git init -q --bare -b main origin.git
 git clone -q origin.git work 2>/dev/null
@@ -57,14 +59,21 @@ git checkout -q staging
 echo "b-from-staging" > shared.txt && echo "same fix" > pb400.txt
 commit "staging moves on" && git push -q origin staging
 
-cat > .release-cherry-pick.json <<'EOF'
-{
+# The tool keeps its config outside the project (see src/config/loader.js); the sandbox's copy goes
+# in $ROOT/config instead of the real ~/.release-cherry-pick. Written through saveConfig so the file
+# gets the same per-project name the tool computes.
+CONFIG_JSON='{
   "git": { "stagingBranch": "staging", "branchPrefix": { "feature": "feature/", "hotfix": "hotfix/", "release": "release/" } },
   "gitlab": { "host": "" },
-  "ai": { "enabled": false, "provider": "anthropic", "apiKey": "", "model": "claude-haiku-4-5-20251001" },
+  "ai": { "enabled": false, "provider": "", "apiKey": "", "model": "", "baseURL": "" },
   "release": { "autoCreateMR": false, "mrTitleFormat": "[{taskId}] {description}", "defaultReviewers": [], "defaultAssignees": [], "mrSquash": true, "mrRemoveSourceBranch": true }
-}
-EOF
+}'
+node -e "
+process.env.RELEASE_CHERRY_PICK_CONFIG_DIR = process.argv[2];
+const loader = require(process.argv[1] + '/src/config/loader');
+loader.saveConfig(JSON.parse(process.argv[3]));
+console.log('Sandbox config: ' + loader.getConfigPath());
+" "$TOOL_DIR" "$ROOT/config" "$CONFIG_JSON"
 
 # Branch list file for the -f/--file input path
 cat > tasks.txt <<'EOF'
@@ -76,6 +85,6 @@ cat > tasks.txt <<'EOF'
 EOF
 
 # Keep the untracked sandbox files out of git status
-printf '.release-cherry-pick.json\ntasks.txt\nrelease-summary.md\nAGENTS.md\nRPD.md\n' >> .git/info/exclude
+printf 'tasks.txt\nrelease-summary.md\nAGENTS.md\nRPD.md\n' >> .git/info/exclude
 
 echo "Sandbox ready: $(pwd)"

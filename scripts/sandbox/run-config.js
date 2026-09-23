@@ -15,8 +15,9 @@ harness.require('src/config/setup')
   .setupWizard()
   .then((config) => {
     if (config) {
-      console.log('\n--- saved .release-cherry-pick.json ---');
-      console.log(fs.readFileSync('.release-cherry-pick.json', 'utf8'));
+      const configPath = harness.require('src/config/loader').getConfigPath();
+      console.log(`\n--- saved ${configPath} ---`);
+      console.log(fs.readFileSync(configPath, 'utf8'));
     }
   })
   .catch((error) => {

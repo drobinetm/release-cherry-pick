@@ -2,7 +2,7 @@
 
 const inquirer = require('inquirer');
 const { searchableList } = require('../utils/prompts');
-const { loadConfig, saveConfig } = require('./loader');
+const { loadConfig, saveConfig, getConfigPath } = require('./loader');
 const { getDefaultConfig } = require('./defaults');
 const { validateConfig } = require('./validator');
 const gitlab = require('../gitlab/client');
@@ -363,7 +363,7 @@ async function setupWizard() {
   try {
     validateConfig(newConfig);
     saveConfig(newConfig);
-    logger.success('Configuration saved successfully!');
+    logger.success(`Configuration saved to ${getConfigPath()}`);
     return newConfig;
   } catch (error) {
     logger.error(error.message);

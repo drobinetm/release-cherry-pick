@@ -21,7 +21,7 @@ async function isCherryPickInProgress() {
 
 // Preflight before the release touches any branch: refuses to start with uncommitted changes to
 // tracked files (checking out staging would fail or carry them onto a release branch) or with a
-// cherry-pick in progress. Untracked files are fine — e.g. the tool's own .release-cherry-pick.json.
+// cherry-pick in progress. Untracked files are fine.
 // Returns where HEAD is now (branch name, or commit hash if detached) so it can be restored later.
 async function captureStartingPoint() {
   let status;
@@ -39,11 +39,7 @@ async function captureStartingPoint() {
   if (changed.length > 0) {
     const list = changed.slice(0, 10).map(file => `  - ${file.path}`).join('\n');
     const more = changed.length > 10 ? `\n  ...and ${changed.length - 10} more` : '';
-    // saveConfig adds the config file to .gitignore, which leaves .gitignore modified
-    const hint = changed.some(file => file.path === '.gitignore')
-      ? '\n(If the .gitignore change is the .release-cherry-pick.json entry added by this tool, just commit it.)'
-      : '';
-    throw new GitError(`You have uncommitted changes. Commit or stash them before running a release:\n${list}${more}${hint}`);
+    throw new GitError(`You have uncommitted changes. Commit or stash them before running a release:\n${list}${more}`);
   }
 
   if (status.detached) {

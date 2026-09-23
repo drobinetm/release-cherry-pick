@@ -81,6 +81,9 @@ function setup(argv, { confirmDefault }) {
   // simple-git captures the cwd when its modules load, so chdir before requiring the tool
   process.chdir(options.workDir);
 
+  // Keep the sandbox's config inside the sandbox, never in the real ~/.release-cherry-pick
+  process.env.RELEASE_CHERRY_PICK_CONFIG_DIR = path.join(path.dirname(options.workDir), 'config');
+
   if (options.fakeGitlab) {
     installFakeGitlab();
   }
