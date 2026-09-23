@@ -6,12 +6,13 @@ const { GitError } = require('../utils/errors');
 
 const git = simpleGit();
 
-async function cherryPickCommits(sourceBranch, taskId, baseBranch = null) {
+// Cherry-picks `commits` (in order) onto the current branch; when not given, the ones tagged
+// "[taskId]" on sourceBranch that aren't on baseBranch (see getCommitsToCherryPick).
+async function cherryPickCommits(sourceBranch, taskId, baseBranch = null, commitsToPick = null) {
   logger.info(`Cherry-picking from ${sourceBranch}`);
 
   try {
-    // Get commits from source branch
-    const commits = await getCommitsToCherryPick(sourceBranch, taskId, baseBranch);
+    const commits = commitsToPick || await getCommitsToCherryPick(sourceBranch, taskId, baseBranch);
 
     if (commits.length === 0) {
       logger.warn(`No commits tagged "[${taskId}]" found on ${sourceBranch} that aren't already on ${baseBranch || 'the base branch'}`);
@@ -99,14 +100,73 @@ async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null) {
     args.push('--reverse');
 
     const log = await git.log(args);
-    return log.all.map(commit => ({
-      hash: commit.hash,
-      message: commit.message,
-      date: commit.date
-    }));
+    // git's --grep matches any line of the message, so a commit whose body (not title) has a line
+    // starting with "[TASK-ID]" would match too; keep only the ones tagged in the title
+    // (simple-git's `message` is the subject line).
+    const tagged = taggedSubjectRegex(taskId);
+    return log.all
+      .filter(commit => tagged.test(commit.message))
+      .map(commit => ({
+        hash: commit.hash,
+        message: commit.message,
+        date: commit.date
+      }));
   } catch (error) {
     throw new GitError(`Failed to get commits: ${error.message}`);
   }
+}
+
+// Title follows the convention for this task: "[TASK-ID] ..." (case-insensitive)
+function taggedSubjectRegex(taskId) {
+  return new RegExp(`^\\[${escapeRegex(taskId)}\\]`, 'i');
+}
+
+// Title follows the convention for *some* task, e.g. "[PB-701] ..."
+const ANY_TASK_TAG = /^\[[A-Z]+-[A-Z]*\d[A-Z0-9]*\]/i;
+
+// Commits on sourceBranch (not yet on baseBranch) whose message mentions taskId without following the
+// "[TASK-ID] ..." convention — e.g. "PB-700: fix", "(PB-700) fix", "fix PB-700" — so they'd be left
+// out of the release silently. Excluded: merge commits (they mention branch names and can't be
+// cherry-picked as-is), titles tagged for another task ("[PB-701] ... PB-700"), and IDs that are
+// just a prefix of another one (PB-700 vs PB-7000). Commits with no ID at all can't be told apart
+// from unrelated history (a branch cut from an old base may carry hundreds), so they're not reported.
+async function findLooseTaskCommits(sourceBranch, taskId, baseBranch = null) {
+  const id = escapeRegex(taskId);
+  const args = [
+    `origin/${sourceBranch}`,
+    `--grep=(^|[^A-Za-z0-9])${id}([^A-Za-z0-9]|$)`,
+    '--extended-regexp',
+    '--regexp-ignore-case',
+    '--no-merges'
+  ];
+  if (baseBranch) {
+    args.push('--not', `origin/${baseBranch}`);
+  }
+  args.push('--reverse');
+
+  try {
+    const log = await git.log(args);
+    const mentions = new RegExp(`(^|[^A-Za-z0-9])${id}(?![A-Za-z0-9])`, 'i');
+    // Title or body (a "[TASK-ID] ..." line only in the body doesn't count as tagged, so it's loose
+    // too); simple-git splits the subject into `message` and the rest into `body`
+    return log.all
+      .filter(commit => (mentions.test(commit.message) || mentions.test(commit.body || '')) && !ANY_TASK_TAG.test(commit.message))
+      .map(commit => ({ hash: commit.hash, message: commit.message, date: commit.date }));
+  } catch (error) {
+    throw new GitError(`Failed to look for commits mentioning ${taskId}: ${error.message}`);
+  }
+}
+
+// Returns `commits` in the order they appear on sourceBranch (oldest first), as cherry-picking a
+// mix of tagged and loose commits must follow the branch's history, not the order they were found.
+async function orderCommitsByHistory(sourceBranch, commits, baseBranch = null) {
+  const args = ['rev-list', '--reverse', `origin/${sourceBranch}`];
+  if (baseBranch) {
+    args.push('--not', `origin/${baseBranch}`);
+  }
+  const order = (await git.raw(args)).trim().split('\n');
+  const position = new Map(order.map((hash, index) => [hash, index]));
+  return [...commits].sort((a, b) => position.get(a.hash) - position.get(b.hash));
 }
 
 async function getConflictingFiles() {
@@ -132,6 +192,8 @@ async function abortCherryPick() {
 module.exports = {
   cherryPickCommits,
   getCommitsToCherryPick,
+  findLooseTaskCommits,
+  orderCommitsByHistory,
   getConflictingFiles,
   abortCherryPick
 };

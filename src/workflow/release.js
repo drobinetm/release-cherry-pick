@@ -10,7 +10,7 @@ const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId }
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { buildReleaseBranchName, createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { captureStartingPoint, restoreStartingPoint, runInterruptible } = require('../git/repo-state');
-const { cherryPickCommits } = require('../git/cherry-pick');
+const { cherryPickCommits, getCommitsToCherryPick, findLooseTaskCommits, orderCommitsByHistory } = require('../git/cherry-pick');
 const gitlab = require('../gitlab/client');
 const { selectReviewer } = require('../gitlab/reviewer-selector');
 const { createMR } = require('../gitlab/mr-creator');
@@ -191,8 +191,11 @@ async function runRelease(options = {}) {
         unfinishedBranch = createdBranch;
         if (signal.interrupted) break;
 
-        // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging
-        const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch);
+        // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging,
+        // plus — if the user agrees — the ones mentioning the task without following the convention
+        const commits = await selectTaskCommits(branchInfo, config, releaseStatus);
+        if (signal.interrupted) break;
+        const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch, commits);
         if (signal.interrupted) break;
 
         if (!cherryPickResult.success) {
@@ -348,6 +351,40 @@ async function resolveTasksToBranches(tasks, branchPrefix = {}) {
   }
 
   return branches;
+}
+
+// The commits to release for a task: the ones tagged "[TASK-ID] ..." and, when some commits mention
+// the task ID without following that convention (e.g. "PB-700: fix"), the user decides whether to
+// include them too (default: no). Either way it's recorded as a note in the release summary, so a
+// partially released task never goes unnoticed.
+async function selectTaskCommits(branchInfo, config, releaseStatus) {
+  const { branchName, taskId } = branchInfo;
+  const base = config.git.stagingBranch;
+  const tagged = await getCommitsToCherryPick(branchName, taskId, base);
+  const loose = await findLooseTaskCommits(branchName, taskId, base);
+  if (loose.length === 0) {
+    return tagged;
+  }
+
+  const list = loose.map(c => `${c.hash.slice(0, 8)} ${c.message}`);
+  logger.warn(`${loose.length} commit(s) on ${branchName} mention ${taskId} but don't follow the "[${taskId}] ..." convention:`);
+  for (const line of list) {
+    logger.warn(`  ${line}`);
+  }
+
+  const { includeLoose } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'includeLoose',
+      message: `Include ${loose.length === 1 ? 'it' : 'them'} in the ${taskId} release too?`,
+      default: false
+    }
+  ]);
+
+  const outcome = includeLoose ? 'included at your request' : 'NOT included';
+  releaseStatus.addNote(taskId, `${loose.length} commit(s) mention ${taskId} without the "[${taskId}] ..." convention and were ${outcome}: ${list.join('; ')}`);
+
+  return includeLoose ? orderCommitsByHistory(branchName, [...tagged, ...loose], base) : tagged;
 }
 
 // Builds branch info from a full branch name, extracting its task ID; null (with a warning) if none.

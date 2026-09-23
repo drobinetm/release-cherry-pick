@@ -21,7 +21,8 @@ function generateSummary(releaseStatus, outputPath = null) {
       status: r.status,
       mrLink: r.mrLink,
       conflicts: r.conflicts,
-      reason: r.reason
+      reason: r.reason,
+      notes: r.notes
     }))
   };
 
@@ -71,6 +72,10 @@ function generateMarkdownSummary(releaseStatus) {
       markdown += `- **${result.reason || 'Nothing to release — no action needed.'}**\n`;
     } else if (result.status === 'NO PROCEDE' && result.reason) {
       markdown += `- **Reason:** ${result.reason}\n`;
+    }
+
+    for (const note of result.notes || []) {
+      markdown += `- ⚠️ ${note}\n`;
     }
 
     markdown += `\n`;
