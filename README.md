@@ -53,9 +53,12 @@ node src/index.js release
 # From a branch-list file
 node src/index.js release --file branches.txt
 
-# Direct — comma-separated branch names
+# Direct — comma-separated task IDs and/or full branch names
+node src/index.js release --branches PB-123,PB-124
 node src/index.js release --branches feature/PB-123-list-user,hotfix/PB-124-fix-favicon
 ```
+
+A bare task ID is resolved to its real remote branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
 
 ### Configure
 
@@ -124,7 +127,15 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    ```bash
    find src -name "*.js" -exec node --check {} \;
    ```
-3. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
+3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID). Its config has `autoCreateMR: false`, so nothing is pushed and `glab`/GitLab is never called:
+   ```bash
+   npm run sandbox:create                                  # (re)creates it in $TMPDIR/release-cherry-pick-sandbox
+   npm run sandbox:run -- -b "PB-100,hotfix/PB-I200-favicon,PB-300,PB-400,PB-500,feature/refactor"
+   npm run sandbox:run -- -f tasks.txt                     # --file path (tasks.txt lives in the sandbox)
+   npm run sandbox:run                                     # interactive-selection path
+   ```
+   `sandbox:run` auto-answers every prompt (list → first choice, checkbox → all, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
+4. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
    ```bash
    git clone --mirror <path-or-url-to-target-repo> /tmp/rcp-test/mirror.git
    git clone /tmp/rcp-test/mirror.git /tmp/rcp-test/work
@@ -132,7 +143,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    # run release-cherry-pick's functions/CLI here — origin points only at the local mirror
    ```
    This gives you real branches, real commit history, and real conflict scenarios with zero risk to the actual GitLab project.
-4. **`glab`-dependent behavior** (auth check/login, listing reviewers, MR creation) and **AI generation** need a real `glab` install/auth and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
+5. **`glab`-dependent behavior** (auth check/login, listing reviewers, MR creation) and **AI generation** need a real `glab` install/auth and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
 
 ## Developers
 

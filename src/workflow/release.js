@@ -6,7 +6,7 @@ const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 const { loadConfig, configExists } = require('../config/loader');
 const { setupWizard } = require('../config/setup');
-const { parseBranchListFile } = require('../git/branch-parser');
+const { parseBranchListFile, extractTaskIdFromBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { cherryPickCommits } = require('../git/cherry-pick');
@@ -60,46 +60,28 @@ async function runRelease(options = {}) {
     try {
       const branchList = parseBranchListFile(options.file);
       logger.info(`Loaded ${branchList.length} task(s) from file, resolving real branch names...`);
-
-      const remoteBranches = await getRemoteBranches();
-
-      for (const b of branchList) {
-        const matches = await resolveBranchNameForTaskId(b.taskId, remoteBranches);
-        let branchName;
-
-        if (matches.length === 1) {
-          branchName = matches[0];
-          logger.info(`${b.taskId} -> ${branchName}`);
-        } else if (matches.length > 1) {
-          logger.warn(`Multiple remote branches match ${b.taskId}: ${matches.join(', ')}`);
-          const { chosen } = await inquirer.prompt([
-            {
-              type: 'list',
-              name: 'chosen',
-              message: `Select the branch for ${b.taskId}:`,
-              choices: matches
-            }
-          ]);
-          branchName = chosen;
-        } else {
-          branchName = `feature/${b.taskId.toLowerCase()}`;
-          logger.warn(`No remote branch found matching ${b.taskId}; guessing ${branchName} (may not exist)`);
-        }
-
-        branches.push({ taskId: b.taskId, description: b.description, branchName });
-      }
+      branches = await resolveTasksToBranches(branchList);
     } catch (error) {
       logger.error(error.message);
       return;
     }
   } else if (options.branches) {
-    // Parse comma-separated branches
-    const branchNames = options.branches.split(',').map(b => b.trim());
-    branches = branchNames.map(branch => ({
-      taskId: branch.split('/').pop().toUpperCase(),
-      description: branch,
-      branchName: branch
-    }));
+    // Comma-separated list: each entry may be a bare task ID ("PB-123", resolved to its real
+    // remote branch) or a full branch name ("feature/PB-123-list-user")
+    const entries = options.branches.split(',').map(b => b.trim()).filter(Boolean);
+    const taskIds = entries.filter(isTaskId);
+    const resolved = await resolveTasksToBranches(taskIds.map(taskId => ({ taskId, description: taskId })));
+
+    for (const entry of entries) {
+      if (isTaskId(entry)) {
+        branches.push(resolved.find(b => b.taskId === entry.toUpperCase()));
+      } else {
+        const info = branchInfoFromName(entry, config);
+        if (info) {
+          branches.push(info);
+        }
+      }
+    }
   } else {
     // Interactive selection
     const selectedBranches = await selectBranchesInteractively();
@@ -107,11 +89,7 @@ async function runRelease(options = {}) {
       logger.warn('No branches selected');
       return;
     }
-    branches = selectedBranches.map(branch => ({
-      taskId: branch.split('/').pop().toUpperCase(),
-      description: branch,
-      branchName: branch
-    }));
+    branches = selectedBranches.map(branch => branchInfoFromName(branch, config)).filter(Boolean);
   }
 
   // Process each branch
@@ -225,6 +203,55 @@ async function runRelease(options = {}) {
   }
 
   logger.success('Release process completed');
+}
+
+// Resolves each { taskId, description } to its real remote branch; prompts when several match.
+async function resolveTasksToBranches(tasks) {
+  if (tasks.length === 0) {
+    return [];
+  }
+
+  const remoteBranches = await getRemoteBranches();
+  const branches = [];
+
+  for (const task of tasks) {
+    const taskId = task.taskId.toUpperCase();
+    const matches = await resolveBranchNameForTaskId(taskId, remoteBranches);
+    let branchName;
+
+    if (matches.length === 1) {
+      branchName = matches[0];
+      logger.info(`${taskId} -> ${branchName}`);
+    } else if (matches.length > 1) {
+      logger.warn(`Multiple remote branches match ${taskId}: ${matches.join(', ')}`);
+      const { chosen } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'chosen',
+          message: `Select the branch for ${taskId}:`,
+          choices: matches
+        }
+      ]);
+      branchName = chosen;
+    } else {
+      branchName = `feature/${taskId.toLowerCase()}`;
+      logger.warn(`No remote branch found matching ${taskId}; guessing ${branchName} (may not exist)`);
+    }
+
+    branches.push({ taskId, description: task.description, branchName });
+  }
+
+  return branches;
+}
+
+// Builds branch info from a full branch name, extracting its task ID; null (with a warning) if none.
+function branchInfoFromName(branchName, config) {
+  const taskId = extractTaskIdFromBranch(branchName, config.git.branchPrefix);
+  if (!taskId) {
+    logger.warn(`Could not extract a task ID from ${branchName} — skipping it`);
+    return null;
+  }
+  return { taskId, description: branchName, branchName };
 }
 
 module.exports = { runRelease };
