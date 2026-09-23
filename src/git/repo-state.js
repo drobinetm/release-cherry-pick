@@ -85,7 +85,69 @@ async function restoreStartingPoint(startingPoint, branchesToDelete = []) {
   }
 }
 
+// How long to wait after Ctrl+C for `work` to reach a checkpoint before cleaning up anyway. Needed
+// when it's blocked on an Inquirer prompt: Inquirer closes the prompt and re-sends SIGINT, but the
+// prompt's promise never settles, so `work` never gets to its checkpoint.
+const INTERRUPT_GRACE_MS = 2000;
+
+// Runs `work(signal)` so that Ctrl+C still restores the repository. The first Ctrl+C sets
+// `signal.interrupted` — `work` must check it between steps and stop — then, once `work` has
+// stopped (or after the grace period), runs `cleanup` and exits with code 130. A second Ctrl+C
+// exits right away. Without interruption, `cleanup` runs once when `work` finishes or throws.
+async function runInterruptible(work, cleanup) {
+  const signal = { interrupted: false };
+  let cleanupPromise = null;
+  const cleanupOnce = () => {
+    cleanupPromise = cleanupPromise || Promise.resolve().then(cleanup);
+    return cleanupPromise;
+  };
+
+  let markWorkStopped;
+  const workStopped = new Promise(resolve => { markWorkStopped = resolve; });
+
+  const onSigint = () => {
+    if (signal.interrupted) {
+      logger.error('Forced exit — the repository may need manual cleanup (check `git status`)');
+      process.exit(130);
+    }
+    signal.interrupted = true;
+    logger.warn('Interrupted — restoring the repository before exiting (press Ctrl+C again to force quit)...');
+    const grace = new Promise(resolve => setTimeout(resolve, INTERRUPT_GRACE_MS));
+    Promise.race([workStopped, grace])
+      .then(cleanupOnce)
+      .finally(() => process.exit(130));
+  };
+  process.on('SIGINT', onSigint);
+
+  // On Ctrl+C during a prompt, Inquirer closes it and re-sends the signal with
+  // process.kill(process.pid, 'SIGINT'). On Windows, process.kill terminates the process
+  // unconditionally (no handlers run), so while `work` runs, turn that self-sent SIGINT into a
+  // regular SIGINT event instead.
+  const realKill = process.kill;
+  process.kill = function (pid, sig) {
+    if (pid === process.pid && sig === 'SIGINT') {
+      process.emit('SIGINT', 'SIGINT');
+      return true;
+    }
+    return realKill.apply(process, arguments);
+  };
+
+  try {
+    return await work(signal);
+  } finally {
+    markWorkStopped();
+    await cleanupOnce();
+    if (signal.interrupted) {
+      // Don't return to the caller (it would go on to the summary prompts); the handler exits
+      process.exit(130);
+    }
+    process.kill = realKill;
+    process.removeListener('SIGINT', onSigint);
+  }
+}
+
 module.exports = {
   captureStartingPoint,
-  restoreStartingPoint
+  restoreStartingPoint,
+  runInterruptible
 };

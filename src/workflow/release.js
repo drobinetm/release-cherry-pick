@@ -9,7 +9,7 @@ const { setupWizard, ensureAiSettings } = require('../config/setup');
 const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { buildReleaseBranchName, createReleaseBranch, pushBranch } = require('../git/release-branch');
-const { captureStartingPoint, restoreStartingPoint } = require('../git/repo-state');
+const { captureStartingPoint, restoreStartingPoint, runInterruptible } = require('../git/repo-state');
 const { cherryPickCommits } = require('../git/cherry-pick');
 const gitlab = require('../gitlab/client');
 const { selectReviewer } = require('../gitlab/reviewer-selector');
@@ -164,9 +164,15 @@ async function runRelease(options = {}) {
   // Release branches created in this run that ended up with nothing worth keeping (conflict,
   // skipped, error): they were never pushed and equal staging, so they're deleted at the end
   const emptyBranches = [];
+  // The branch being processed right now, while it's still local-only; if Ctrl+C interrupts it
+  // midway, it's unfinished and unpushed, so it's discarded too
+  let unfinishedBranch = null;
 
-  try {
+  // Cleanup (return to the starting branch, delete empty release branches) runs when the loop
+  // ends, if it throws, and on Ctrl+C
+  await runInterruptible(async (signal) => {
     for (const branchInfo of branches) {
+      if (signal.interrupted) break;
       logger.header(`Processing ${branchInfo.taskId}`);
       let createdBranch = null;
 
@@ -183,15 +189,19 @@ async function runRelease(options = {}) {
           continue;
         }
         createdBranch = releaseBranch.branch;
+        unfinishedBranch = createdBranch;
+        if (signal.interrupted) break;
 
         // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging
         const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch);
+        if (signal.interrupted) break;
 
         if (!cherryPickResult.success) {
           const conflictFiles = cherryPickResult.conflicts.flatMap(c => c.files);
           // Conflict: do nothing further for this branch (no push, no MR) — just record it.
           releaseStatus.markConflict(branchInfo.taskId, releaseBranch.branch, conflictFiles);
           emptyBranches.push(createdBranch);
+          unfinishedBranch = null;
           continue;
         }
 
@@ -204,6 +214,7 @@ async function runRelease(options = {}) {
           releaseStatus.markSkipped(branchInfo.taskId, releaseBranch.branch, reason);
           logger.warn(`${branchInfo.taskId}: ${reason}`);
           emptyBranches.push(createdBranch);
+          unfinishedBranch = null;
           continue;
         }
 
@@ -212,11 +223,15 @@ async function runRelease(options = {}) {
         if (config.release.autoCreateMR) {
           try {
             await pushBranch(releaseBranch.branch);
+            // Pushed: from here on the branch is kept even if interrupted
+            unfinishedBranch = null;
+            if (signal.interrupted) break;
 
             if (!projectMembers) {
               projectMembers = await gitlab.getProjectMembers(config);
             }
             const reviewers = await selectReviewer(projectMembers, config.release);
+            if (signal.interrupted) break;
 
             const mr = await createMR(config, {
               sourceBranch: releaseBranch.branch,
@@ -229,28 +244,33 @@ async function runRelease(options = {}) {
             });
             mrLink = mr.url;
           } catch (error) {
+            if (signal.interrupted) break;
             logger.warn(`Failed to create MR: ${error.message}`);
           }
         }
 
         releaseStatus.markProcede(branchInfo.taskId, releaseBranch.branch, mrLink);
+        unfinishedBranch = null;
         logger.success(`${branchInfo.taskId} completed successfully`);
 
       } catch (error) {
+        // Ctrl+C also kills the running git command, so its error is expected — just stop
+        if (signal.interrupted) break;
         logger.error(`Failed to process ${branchInfo.taskId}: ${error.message}`);
         const branchLabel = createdBranch || buildReleaseBranchName(branchInfo.branchName, config.git.branchPrefix);
         releaseStatus.markNoProcede(branchInfo.taskId, branchLabel, [error.message]);
         // Errors before the push leave an unpushed branch behind (push failures are handled above
         // and keep the branch as PROCEDE), so it's safe to discard
-        if (createdBranch) {
-          emptyBranches.push(createdBranch);
+        if (unfinishedBranch) {
+          emptyBranches.push(unfinishedBranch);
+          unfinishedBranch = null;
         }
       }
     }
-  } finally {
-    // Always leave the repo where the user started, even if something above threw
-    await restoreStartingPoint(startingPoint, emptyBranches);
-  }
+  }, () => restoreStartingPoint(
+    startingPoint,
+    unfinishedBranch ? [...emptyBranches, unfinishedBranch] : emptyBranches
+  ));
 
   // Display summary
   releaseStatus.displaySummary();
