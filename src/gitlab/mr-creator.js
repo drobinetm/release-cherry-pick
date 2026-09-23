@@ -2,7 +2,7 @@
 
 const logger = require('../utils/logger');
 const { GitLabError } = require('../utils/errors');
-const glab = require('../glab/client');
+const gitlab = require('./client');
 const { generateMRTitleAndDescription } = require('./ai-description');
 
 function buildFallbackTitle(config, taskId, description) {
@@ -18,7 +18,7 @@ function buildFallbackDescription(taskId, description, commits) {
   return mrDescription;
 }
 
-async function createMR(config, { sourceBranch, targetBranch, taskId, description, commits = [], reviewers = [] }) {
+async function createMR(config, { sourceBranch, targetBranch, taskId, description, commits = [], reviewers = [], members = null }) {
   let title = buildFallbackTitle(config, taskId, description);
   let mrDescription = buildFallbackDescription(taskId, description, commits);
 
@@ -29,7 +29,7 @@ async function createMR(config, { sourceBranch, targetBranch, taskId, descriptio
   }
 
   try {
-    const result = await glab.createMergeRequest({
+    const result = await gitlab.createMergeRequest(config, {
       sourceBranch,
       targetBranch,
       title,
@@ -37,7 +37,8 @@ async function createMR(config, { sourceBranch, targetBranch, taskId, descriptio
       reviewers,
       assignees: config.release.defaultAssignees || [],
       squash: config.release.mrSquash !== false,
-      removeSourceBranch: config.release.mrRemoveSourceBranch !== false
+      removeSourceBranch: config.release.mrRemoveSourceBranch !== false,
+      members
     });
 
     logger.success(`MR created: ${result.url}`);

@@ -4,13 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const inquirer = require('inquirer');
 const logger = require('../utils/logger');
-const { loadConfig, configExists } = require('../config/loader');
-const { setupWizard } = require('../config/setup');
+const { loadConfig, configExists, saveConfig } = require('../config/loader');
+const { setupWizard, ensureAiSettings } = require('../config/setup');
 const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { cherryPickCommits } = require('../git/cherry-pick');
-const glab = require('../glab/client');
+const gitlab = require('../gitlab/client');
 const { selectReviewer } = require('../gitlab/reviewer-selector');
 const { createMR } = require('../gitlab/mr-creator');
 const ReleaseStatus = require('../git/release-status');
@@ -47,9 +47,12 @@ async function runRelease(options = {}) {
     }
   }
 
-  // Preflight: make sure we're connected to GitLab via glab before doing any GitLab work
+  // Feature 1: if AI is enabled but provider/model were never saved, ask now and persist
+  config = await ensureAiSettings(config);
+
+  // Preflight: make sure we have a valid GitLab token before doing any GitLab work
   if (config.release.autoCreateMR) {
-    await glab.ensureAuthenticated(config);
+    await gitlab.ensureAuthenticated(config);
   }
 
   // Get branches to process
@@ -86,13 +89,72 @@ async function runRelease(options = {}) {
       }
     }
   } else {
-    // Interactive selection
-    const selectedBranches = await selectBranchesInteractively(config.git.branchPrefix);
-    if (selectedBranches.length === 0) {
-      logger.warn('No branches selected');
-      return;
+    // Feature 2: use branches saved in configuration when present; otherwise select interactively
+    const savedBranches = Array.isArray(config.release && config.release.branches)
+      ? config.release.branches
+      : [];
+
+    let selectedBranches = [];
+
+    if (savedBranches.length > 0) {
+      const { useSaved } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'useSaved',
+          message: `Use ${savedBranches.length} branch(es) saved in configuration? (${savedBranches.join(', ')})`,
+          default: true
+        }
+      ]);
+
+      if (useSaved) {
+        const remoteBranches = await getRemoteBranches();
+        for (const saved of savedBranches) {
+          if (remoteBranches.includes(saved)) {
+            selectedBranches.push(saved);
+          } else {
+            logger.warn(`Saved branch no longer exists on remote: ${saved} (skipped)`);
+          }
+        }
+
+        if (selectedBranches.length === 0) {
+          logger.warn('No saved branches still exist on the remote; falling back to interactive selection');
+        }
+      }
+    } else {
+      logger.info('No branches saved in configuration yet; select them interactively');
     }
-    branches = selectedBranches.map(branch => branchInfoFromName(branch, config)).filter(Boolean);
+
+    if (selectedBranches.length === 0) {
+      selectedBranches = await selectBranchesInteractively();
+      if (selectedBranches.length === 0) {
+        logger.warn('No branches selected');
+        return;
+      }
+
+      const { saveSelection } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'saveSelection',
+          message: 'Save this branch selection as default in configuration?',
+          default: true
+        }
+      ]);
+
+      if (saveSelection) {
+        if (!config.release || typeof config.release !== 'object') {
+          config.release = {};
+        }
+        config.release.branches = selectedBranches;
+        saveConfig(config);
+        logger.success(`Saved ${selectedBranches.length} branch(es) to configuration`);
+      }
+    }
+
+    branches = selectedBranches.map(branch => ({
+      taskId: branch.split('/').pop().toUpperCase(),
+      description: branch,
+      branchName: branch
+    }));
   }
 
   // Process each branch
@@ -143,7 +205,7 @@ async function runRelease(options = {}) {
           await pushBranch(releaseBranch.branch);
 
           if (!projectMembers) {
-            projectMembers = await glab.getProjectMembers();
+            projectMembers = await gitlab.getProjectMembers(config);
           }
           const reviewers = await selectReviewer(projectMembers, config.release);
 
@@ -153,7 +215,8 @@ async function runRelease(options = {}) {
             taskId: branchInfo.taskId,
             description: branchInfo.description,
             commits: cherryPickResult.commits,
-            reviewers
+            reviewers,
+            members: projectMembers
           });
           mrLink = mr.url;
         } catch (error) {

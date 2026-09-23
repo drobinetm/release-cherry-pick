@@ -3,6 +3,7 @@
 const inquirer = require('inquirer');
 const simpleGit = require('simple-git');
 const logger = require('../utils/logger');
+const { searchableCheckbox } = require('../utils/prompts');
 const { defaultConfig } = require('../config/defaults');
 
 const git = simpleGit();
@@ -27,16 +28,11 @@ async function selectBranchesInteractively(branchPrefix) {
   }
 
   const { selectedBranches } = await inquirer.prompt([
-    {
-      type: 'checkbox',
+    searchableCheckbox({
       name: 'selectedBranches',
-      message: 'Select branches for release:',
-      choices: branches.map(branch => ({
-        name: branch,
-        value: branch
-      })),
+      message: 'Select branches for release (type to search):',
       pageSize: 15
-    }
+    }, branches)
   ]);
 
   return selectedBranches;

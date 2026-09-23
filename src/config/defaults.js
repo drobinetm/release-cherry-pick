@@ -10,13 +10,15 @@ const defaultConfig = {
     }
   },
   gitlab: {
-    host: ''
+    host: '',
+    token: ''
   },
   ai: {
-    enabled: false,
+    enabled: true,
     provider: 'anthropic',
     apiKey: '',
-    model: 'claude-haiku-4-5-20251001'
+    model: 'claude-haiku-4-5-20251001',
+    baseURL: 'https://api.anthropic.com/v1'
   },
   release: {
     autoCreateMR: true,
@@ -25,9 +27,8 @@ const defaultConfig = {
     defaultReviewers: [],
     defaultAssignees: [],
     mrSquash: true,
-    mrRemoveSourceBranch: true
-    // Legacy: release.defaultReviewerPattern (a regex over member usernames) is still honored
-    // when present in an existing config file and defaultReviewers is empty.
+    mrRemoveSourceBranch: true,
+    branches: []
   }
 };
 
