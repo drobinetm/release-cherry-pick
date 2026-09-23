@@ -13,7 +13,7 @@ function getToken(config) {
   return (config.gitlab && config.gitlab.token) || process.env.GITLAB_TOKEN || '';
 }
 
-// Parses a git remote URL into { host, projectPath }. Handles SCP-like SSH remotes
+// Parses a git remote URL into { host, protocol, projectPath }. Handles SCP-like SSH remotes
 // (git@host:group/proj.git) and scheme URLs (https://[user@]host[:port]/group/proj.git,
 // ssh://git@host:2222/group/proj.git). Only http(s) keeps the port in `host`: an SSH port isn't
 // where the web API lives. Returns null if the URL can't be parsed.
@@ -23,13 +23,18 @@ function parseRemoteUrl(url) {
     // SCP-like syntax: "[user@]host:path" (checking for a scheme first matters: "https://..."
     // contains ":" too, which used to be misread as SCP syntax)
     const scp = url.match(/^(?:[^@/]+@)?([^:/]+):(.+)$/);
-    return scp ? { host: scp[1], projectPath: normalizeProjectPath(scp[2]) } : null;
+    return scp ? { host: scp[1], protocol: 'https', projectPath: normalizeProjectPath(scp[2]) } : null;
   }
 
   try {
     const parsed = new URL(url);
     const isHttp = /^https?:$/.test(parsed.protocol);
-    return { host: isHttp ? parsed.host : parsed.hostname, projectPath: normalizeProjectPath(parsed.pathname) };
+    return {
+      host: isHttp ? parsed.host : parsed.hostname,
+      // Web/API protocol: an http:// remote means GitLab is served over plain http
+      protocol: isHttp ? parsed.protocol.slice(0, -1) : 'https',
+      projectPath: normalizeProjectPath(parsed.pathname)
+    };
   } catch {
     return null;
   }
@@ -61,26 +66,83 @@ function getOriginRemote() {
   return originRemotePromise;
 }
 
+// Turns whatever was configured as gitlab.host into the GitLab base URL ("https://host[:port]" plus
+// a relative URL root if GitLab is installed under a sub-path, e.g. "https://example.com/gitlab").
+// People often paste a project or page URL instead of the host, e.g.
+// "https://gitlab.example.com/group/proj/-/project_members", which would put the API under the
+// project path and 404; so everything from GitLab's "/-/" page separator on is dropped, and so is
+// the origin remote's project path when the value ends with it.
+async function normalizeGitlabHost(host) {
+  let value = String(host || '').trim();
+  if (!value) {
+    return '';
+  }
+  if (!/^https?:\/\//i.test(value)) {
+    value = `https://${value}`;
+  }
+
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
+
+  let pathname = url.pathname.replace(/\/-(\/.*)?$/, '').replace(/\/+$/, '').replace(/\.git$/, '');
+  try {
+    const { projectPath } = await getOriginRemote();
+    if (pathname.toLowerCase().endsWith(`/${projectPath}`.toLowerCase())) {
+      pathname = pathname.slice(0, pathname.length - projectPath.length - 1);
+    }
+  } catch {
+    // No usable origin remote: keep the path (it may be a relative URL root)
+  }
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
+let warnedAboutHost = false;
+
 // API base URL: gitlab.host from config when set (needed e.g. when the SSH remote uses a
 // ~/.ssh/config alias instead of the real host), otherwise the host of the origin remote, so a
 // self-managed instance works without configuring anything; gitlab.com as a last resort.
 async function getApiBase(config) {
-  let host = config.gitlab && config.gitlab.host;
-  if (!host) {
+  const configured = config.gitlab && config.gitlab.host;
+  let base;
+  if (configured) {
+    base = await normalizeGitlabHost(configured);
+    const asGiven = String(configured).trim().replace(/\/+$/, '');
+    if (!warnedAboutHost && base !== asGiven && base !== `https://${asGiven}`) {
+      warnedAboutHost = true;
+      logger.warn(`gitlab.host "${configured}" looks like a project/page URL; using ${base} (run config --init to fix it, or leave it blank to use the origin remote's host)`);
+    }
+  } else {
     try {
-      host = (await getOriginRemote()).host;
+      const remote = await getOriginRemote();
+      base = `${remote.protocol}://${remote.host}`;
     } catch {
-      host = DEFAULT_HOST;
+      base = `https://${DEFAULT_HOST}`;
     }
   }
-  const trimmed = String(host).trim().replace(/\/+$/, '');
-  const origin = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  return `${origin}/api/v4`;
+  return `${base}/api/v4`;
 }
 
 // Project path (e.g. "group/sub/proj") from the `origin` remote, URL-encoded for use as `:id`.
-async function getProjectPathId() {
-  return encodeURIComponent((await getOriginRemote()).projectPath);
+// If gitlab.host includes a relative URL root (GitLab served under e.g. https://example.com/gitlab),
+// the remote's path starts with it ("gitlab/group/proj"), and it isn't part of the project path.
+async function getProjectPathId(config) {
+  let { projectPath } = await getOriginRemote();
+  const configured = config && config.gitlab && config.gitlab.host;
+  if (configured) {
+    try {
+      const root = new URL(await normalizeGitlabHost(configured)).pathname.replace(/^\/+|\/+$/g, '');
+      if (root && projectPath.toLowerCase().startsWith(`${root.toLowerCase()}/`)) {
+        projectPath = projectPath.slice(root.length + 1);
+      }
+    } catch {
+      // Unparseable host: keep the remote's path as-is
+    }
+  }
+  return encodeURIComponent(projectPath);
 }
 
 async function apiRequest(config, path, { method = 'GET', body } = {}) {
@@ -184,7 +246,7 @@ async function ensureAuthenticated(config) {
 
 async function getProjectMembers(config) {
   try {
-    const projectId = await getProjectPathId();
+    const projectId = await getProjectPathId(config);
     const members = [];
     let page = 1;
 
@@ -238,7 +300,7 @@ async function createMergeRequest(
   { sourceBranch, targetBranch, title, description, reviewers = [], assignees = [], squash = true, removeSourceBranch = true, members = null }
 ) {
   try {
-    const projectId = await getProjectPathId();
+    const projectId = await getProjectPathId(config);
 
     let memberList = members;
     if (!memberList && (reviewers.length > 0 || assignees.length > 0)) {
@@ -287,5 +349,6 @@ module.exports = {
   createMergeRequest,
   getApiBase,
   getToken,
-  parseRemoteUrl
+  parseRemoteUrl,
+  normalizeGitlabHost
 };

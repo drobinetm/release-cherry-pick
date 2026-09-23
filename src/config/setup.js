@@ -237,8 +237,10 @@ async function setupWizard() {
     {
       type: 'input',
       name: 'gitlabHost',
-      message: 'GitLab hostname (leave blank to use the host of the origin remote):',
-      default: config.gitlab.host
+      message: 'GitLab hostname, e.g. gitlab.example.com (leave blank to use the host of the origin remote):',
+      default: config.gitlab.host,
+      // Keeps only the host if a project/page URL is pasted (see normalizeGitlabHost)
+      filter: (value) => gitlab.normalizeGitlabHost(value)
     },
     {
       type: 'password',
