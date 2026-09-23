@@ -81,7 +81,7 @@ The tool resolves each task ID to its real remote branch automatically (asking y
 
 ### Configuration file
 
-Written to `.release-cherry-pick.json` in the project root you run the tool from. Since it can hold secrets (`gitlab.token`, `ai.apiKey`) and per-developer settings, every save also makes sure the project's `.gitignore` lists it (creating `.gitignore` if there isn't one) — commit that `.gitignore` change. If the config file was already committed, the tool warns you to untrack it with `git rm --cached .release-cherry-pick.json`.
+Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **never stored inside the project**. It lives in your home directory, one file per project: `~/.release-cherry-pick/<project>.json` (e.g. `C:\Users\<you>\.release-cherry-pick\gitlab.example.com_group_project.json`). The file name comes from the `origin` remote (host + project path), so it's the same whether you cloned over SSH or HTTPS and doesn't change if you move the folder; repos without a remote use the folder name plus a short hash of its path. `config --show` prints the file's location. On Linux/macOS the file is created readable by your user only. Set `RELEASE_CHERRY_PICK_CONFIG_DIR` to use another directory.
 
 ```json
 {
