@@ -120,6 +120,7 @@ async function createMergeRequest({
   title,
   description,
   reviewers = [],
+  assignees = [],
   squash = true,
   removeSourceBranch = true
 }) {
@@ -142,6 +143,9 @@ async function createMergeRequest({
   }
   if (reviewers.length > 0) {
     args.push('--reviewer', reviewers.join(','));
+  }
+  if (assignees.length > 0) {
+    args.push('--assignee', assignees.join(','));
   }
 
   try {

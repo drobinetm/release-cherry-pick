@@ -145,7 +145,7 @@ async function runRelease(options = {}) {
           if (!projectMembers) {
             projectMembers = await glab.getProjectMembers();
           }
-          const reviewers = await selectReviewer(projectMembers, config.release.defaultReviewerPattern);
+          const reviewers = await selectReviewer(projectMembers, config.release);
 
           const mr = await createMR(config, {
             sourceBranch: releaseBranch.branch,

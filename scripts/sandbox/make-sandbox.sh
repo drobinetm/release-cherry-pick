@@ -62,7 +62,7 @@ cat > .release-cherry-pick.json <<'EOF'
   "git": { "stagingBranch": "staging", "branchPrefix": { "feature": "feature/", "hotfix": "hotfix/", "release": "release/" } },
   "gitlab": { "host": "" },
   "ai": { "enabled": false, "provider": "anthropic", "apiKey": "", "model": "claude-haiku-4-5-20251001" },
-  "release": { "autoCreateMR": false, "mrTitleFormat": "[{taskId}] {description}", "defaultAssignees": [], "mrSquash": true, "mrRemoveSourceBranch": true, "defaultReviewerPattern": "^che(i|y)ner$" }
+  "release": { "autoCreateMR": false, "mrTitleFormat": "[{taskId}] {description}", "defaultReviewers": [], "defaultAssignees": [], "mrSquash": true, "mrRemoveSourceBranch": true }
 }
 EOF
 

@@ -21,10 +21,13 @@ const defaultConfig = {
   release: {
     autoCreateMR: true,
     mrTitleFormat: '[{taskId}] {description}',
+    // GitLab usernames, picked from the real project members in the setup wizard
+    defaultReviewers: [],
     defaultAssignees: [],
     mrSquash: true,
-    mrRemoveSourceBranch: true,
-    defaultReviewerPattern: '^che(i|y)ner$'
+    mrRemoveSourceBranch: true
+    // Legacy: release.defaultReviewerPattern (a regex over member usernames) is still honored
+    // when present in an existing config file and defaultReviewers is empty.
   }
 };
 

@@ -24,8 +24,8 @@ Given a list of task IDs (from a file, a `-b` flag, or interactive branch select
 2. **Verifies you're connected to GitLab** via the `glab` CLI, and offers to run `glab auth login` if you're not.
 3. **Cherry-picks only that task's own commits** onto the release branch — matched by the team's `[TASK-ID] description` commit message convention (not a naive branch diff, which breaks when a branch wasn't cut from a recent `staging`).
 4. **Drafts the MR title and description with Anthropic Claude** from the picked commits, falling back to a static template if AI is disabled or fails.
-5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting whichever member matches your configured default reviewer pattern.
-6. **Creates the MR** with squash-commits and delete-source-branch checked by default.
+5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting your configured default reviewers.
+6. **Creates the MR** with squash-commits and delete-source-branch checked by default, assigned to your configured default assignees.
 7. **Never auto-resolves problems for you**: if cherry-picking conflicts, or the release branch already exists remotely, it stops touching that branch immediately and reports it — you decide manually. Branches whose changes are already present get reported as `SKIPPED`, not silently pushed.
 8. **Produces a final report** (console + `release-summary.md`) showing exactly which branches shipped, which need manual conflict resolution, which were skipped, and the MR link for each.
 
@@ -105,13 +105,17 @@ Written to `.release-cherry-pick.json` in the project root you run the tool from
   "release": {
     "autoCreateMR": true,
     "mrTitleFormat": "[{taskId}] {description}",
+    "defaultReviewers": [],
     "defaultAssignees": [],
     "mrSquash": true,
-    "mrRemoveSourceBranch": true,
-    "defaultReviewerPattern": "^che(i|y)ner$"
+    "mrRemoveSourceBranch": true
   }
 }
 ```
+
+Any option missing from the file is filled in from these defaults when it's loaded, so config files written by older versions keep working; the merged result is validated up front, and every problem (wrong type, invalid value) is reported in a single clear error.
+
+`config --init` asks for every option above. When `autoCreateMR` is on, it connects through `glab` and lists the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. If `glab` isn't installed/authenticated or the call fails, it falls back to typing comma-separated usernames. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
 
 GitLab authentication is handled entirely by `glab` (`gitlab.host` is only needed for a self-managed instance) — no token is stored by this tool. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
 
@@ -134,7 +138,15 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    npm run sandbox:run -- -f tasks.txt                     # --file path (tasks.txt lives in the sandbox)
    npm run sandbox:run                                     # interactive-selection path
    ```
-   `sandbox:run` auto-answers every prompt (list → first choice, checkbox → all, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
+   `sandbox:run` auto-answers every prompt (list → first choice, checkbox → the checked choices or all if none are, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
+
+   Two more flags work with both `sandbox:run` and `sandbox:config` (the setup wizard, whose prompts default to their current values):
+   - `--fake-glab` replaces the `glab` CLI with a fake (authenticated, fixed member list; `mr create` prints the exact arguments it received and returns a fake URL), so the member-selection and MR-creation code runs end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
+   - `--answer name=value` forces the answer of a prompt by name (value parsed as JSON when possible).
+   ```bash
+   npm run sandbox:config -- --fake-glab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'
+   npm run sandbox:run -- --fake-glab -b "PB-100,PB-300"   # shows the `glab mr create` call, incl. --reviewer/--assignee
+   ```
 4. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
    ```bash
    git clone --mirror <path-or-url-to-target-repo> /tmp/rcp-test/mirror.git
