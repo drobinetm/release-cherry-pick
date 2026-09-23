@@ -26,13 +26,12 @@ async function createReleaseBranch(sourceBranch, stagingBranch = 'staging', bran
     // Fetch latest changes
     await git.fetch();
 
-    // Check if release branch already exists
-    const branches = await git.branch(['-r']);
-    const branchExists = branches.all.some(b => 
-      b.includes(releaseBranchName) || b.includes(`origin/${releaseBranchName}`)
-    );
+    // Check if release branch already exists (exact name match: a substring check would make
+    // e.g. release/PB-12 look taken just because release/PB-123 exists)
+    const remoteBranches = await git.branch(['-r']);
+    const existsOnOrigin = remoteBranches.all.includes(`origin/${releaseBranchName}`);
 
-    if (branchExists) {
+    if (existsOnOrigin) {
       // Deleting/overwriting a remote branch here would be a destructive action on shared
       // state (it may already have commits or an open MR) — never do it automatically, even
       // behind a confirmation prompt. Report it and let the user resolve it manually.
@@ -44,6 +43,18 @@ async function createReleaseBranch(sourceBranch, stagingBranch = 'staging', bran
       };
     }
 
+    // A local-only leftover (e.g. from an earlier run, possibly with manual work on it) is not
+    // deleted automatically either — same reasoning, and it's the user's work to decide about.
+    const localBranches = await git.branchLocal();
+    if (localBranches.all.includes(releaseBranchName)) {
+      logger.error(`Release branch ${releaseBranchName} already exists locally. If it's not needed, delete it with \`git branch -D ${releaseBranchName}\` and re-run.`);
+      return {
+        success: false,
+        branch: releaseBranchName,
+        reason: `Release branch ${releaseBranchName} already exists locally — delete it (\`git branch -D ${releaseBranchName}\`) if it's not needed and re-run`
+      };
+    }
+
     // Checkout staging and create release branch
     await git.checkout(stagingBranch);
     await git.pull('origin', stagingBranch);
@@ -51,7 +62,7 @@ async function createReleaseBranch(sourceBranch, stagingBranch = 'staging', bran
 
     logger.success(`Release branch ${releaseBranchName} created from ${stagingBranch}`);
 
-    return { success: true, branch: releaseBranchName };
+    return { success: true, created: true, branch: releaseBranchName };
   } catch (error) {
     throw new GitError(`Failed to create release branch: ${error.message}`);
   }

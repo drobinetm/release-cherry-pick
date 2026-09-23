@@ -70,8 +70,8 @@ function generateMarkdownSummary(releaseStatus) {
       markdown += `- **Conflicting files:** ${result.conflicts.join(', ')}\n`;
     } else if (result.status === 'SKIPPED') {
       markdown += `- **${result.reason || 'Nothing to release — no action needed.'}**\n`;
-    } else if (result.conflicts.length > 0) {
-      markdown += `- **Conflicts:** ${result.conflicts.join(', ')}\n`;
+    } else if (result.status === 'NO PROCEDE' && result.reason) {
+      markdown += `- **Reason:** ${result.reason}\n`;
     }
 
     markdown += `\n`;

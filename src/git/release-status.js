@@ -23,8 +23,9 @@ class ReleaseStatus {
     this.addResult(taskId, branch, 'PROCEDE', { mrLink });
   }
 
-  markNoProcede(taskId, branch, conflicts = []) {
-    this.addResult(taskId, branch, 'NO PROCEDE', { conflicts });
+  // reasons: why the branch couldn't be processed (e.g. release branch already exists, git error)
+  markNoProcede(taskId, branch, reasons = []) {
+    this.addResult(taskId, branch, 'NO PROCEDE', { reason: reasons.join('; ') || null });
   }
 
   markConflict(taskId, branch, conflicts = []) {
@@ -84,8 +85,8 @@ class ReleaseStatus {
         console.log(`  Needs manual resolution. Conflicting files: ${result.conflicts.join(', ')}`);
       } else if (result.status === 'SKIPPED') {
         console.log(`  ${result.reason || 'Nothing to release — no action needed.'}`);
-      } else if (result.conflicts.length > 0) {
-        console.log(`  Conflicts: ${result.conflicts.join(', ')}`);
+      } else if (result.status === 'NO PROCEDE' && result.reason) {
+        console.log(`  Reason: ${result.reason}`);
       }
     }
 

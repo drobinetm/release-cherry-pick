@@ -8,7 +8,8 @@ const { loadConfig, configExists, saveConfig } = require('../config/loader');
 const { setupWizard, ensureAiSettings } = require('../config/setup');
 const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
-const { createReleaseBranch, pushBranch } = require('../git/release-branch');
+const { buildReleaseBranchName, createReleaseBranch, pushBranch } = require('../git/release-branch');
+const { captureStartingPoint, restoreStartingPoint } = require('../git/repo-state');
 const { cherryPickCommits } = require('../git/cherry-pick');
 const gitlab = require('../gitlab/client');
 const { selectReviewer } = require('../gitlab/reviewer-selector');
@@ -21,6 +22,10 @@ const { ConfigError } = require('../utils/errors');
 
 async function runRelease(options = {}) {
   logger.header('Release Cherry-Pick');
+
+  // Fail fast (before any prompt) on uncommitted changes / a cherry-pick in progress, and remember
+  // where HEAD is so it can be restored once all branches are processed
+  const startingPoint = await captureStartingPoint();
 
   // Check and setup configuration
   let config = loadConfig();
@@ -156,77 +161,95 @@ async function runRelease(options = {}) {
   // Process each branch
   const releaseStatus = new ReleaseStatus();
   let projectMembers = null;
+  // Release branches created in this run that ended up with nothing worth keeping (conflict,
+  // skipped, error): they were never pushed and equal staging, so they're deleted at the end
+  const emptyBranches = [];
 
-  for (const branchInfo of branches) {
-    logger.header(`Processing ${branchInfo.taskId}`);
+  try {
+    for (const branchInfo of branches) {
+      logger.header(`Processing ${branchInfo.taskId}`);
+      let createdBranch = null;
 
-    try {
-      // Create release branch
-      const releaseBranch = await createReleaseBranch(
-        branchInfo.branchName,
-        config.git.stagingBranch,
-        config.git.branchPrefix
-      );
+      try {
+        // Create release branch
+        const releaseBranch = await createReleaseBranch(
+          branchInfo.branchName,
+          config.git.stagingBranch,
+          config.git.branchPrefix
+        );
 
-      if (!releaseBranch.success) {
-        releaseStatus.markNoProcede(branchInfo.taskId, releaseBranch.branch, [releaseBranch.reason]);
-        continue;
-      }
+        if (!releaseBranch.success) {
+          releaseStatus.markNoProcede(branchInfo.taskId, releaseBranch.branch, [releaseBranch.reason]);
+          continue;
+        }
+        createdBranch = releaseBranch.branch;
 
-      // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging
-      const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch);
+        // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging
+        const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch);
 
-      if (!cherryPickResult.success) {
-        const conflictFiles = cherryPickResult.conflicts.flatMap(c => c.files);
-        // Conflict: do nothing further for this branch (no push, no MR) — just record it.
-        releaseStatus.markConflict(branchInfo.taskId, releaseBranch.branch, conflictFiles);
-        continue;
-      }
+        if (!cherryPickResult.success) {
+          const conflictFiles = cherryPickResult.conflicts.flatMap(c => c.files);
+          // Conflict: do nothing further for this branch (no push, no MR) — just record it.
+          releaseStatus.markConflict(branchInfo.taskId, releaseBranch.branch, conflictFiles);
+          emptyBranches.push(createdBranch);
+          continue;
+        }
 
-      if (cherryPickResult.commitsCherryPicked === 0) {
-        // No real commits landed (either none were found tagged for this task, or they were
-        // all already applied / empty diffs) — nothing to push or open an MR for.
-        const reason = cherryPickResult.commitsAlreadyApplied > 0
-          ? `Changes already present on ${config.git.stagingBranch} — nothing to release`
-          : `No commits tagged [${branchInfo.taskId}] found on ${branchInfo.branchName}`;
-        releaseStatus.markSkipped(branchInfo.taskId, releaseBranch.branch, reason);
-        logger.warn(`${branchInfo.taskId}: ${reason}`);
-        continue;
-      }
+        if (cherryPickResult.commitsCherryPicked === 0) {
+          // No real commits landed (either none were found tagged for this task, or they were
+          // all already applied / empty diffs) — nothing to push or open an MR for.
+          const reason = cherryPickResult.commitsAlreadyApplied > 0
+            ? `Changes already present on ${config.git.stagingBranch} — nothing to release`
+            : `No commits tagged [${branchInfo.taskId}] found on ${branchInfo.branchName}`;
+          releaseStatus.markSkipped(branchInfo.taskId, releaseBranch.branch, reason);
+          logger.warn(`${branchInfo.taskId}: ${reason}`);
+          emptyBranches.push(createdBranch);
+          continue;
+        }
 
-      // Create MR if configured
-      let mrLink = null;
-      if (config.release.autoCreateMR) {
-        try {
-          await pushBranch(releaseBranch.branch);
+        // Create MR if configured
+        let mrLink = null;
+        if (config.release.autoCreateMR) {
+          try {
+            await pushBranch(releaseBranch.branch);
 
-          if (!projectMembers) {
-            projectMembers = await gitlab.getProjectMembers(config);
+            if (!projectMembers) {
+              projectMembers = await gitlab.getProjectMembers(config);
+            }
+            const reviewers = await selectReviewer(projectMembers, config.release);
+
+            const mr = await createMR(config, {
+              sourceBranch: releaseBranch.branch,
+              targetBranch: config.git.stagingBranch,
+              taskId: branchInfo.taskId,
+              description: branchInfo.description,
+              commits: cherryPickResult.commits,
+              reviewers,
+              members: projectMembers
+            });
+            mrLink = mr.url;
+          } catch (error) {
+            logger.warn(`Failed to create MR: ${error.message}`);
           }
-          const reviewers = await selectReviewer(projectMembers, config.release);
+        }
 
-          const mr = await createMR(config, {
-            sourceBranch: releaseBranch.branch,
-            targetBranch: config.git.stagingBranch,
-            taskId: branchInfo.taskId,
-            description: branchInfo.description,
-            commits: cherryPickResult.commits,
-            reviewers,
-            members: projectMembers
-          });
-          mrLink = mr.url;
-        } catch (error) {
-          logger.warn(`Failed to create MR: ${error.message}`);
+        releaseStatus.markProcede(branchInfo.taskId, releaseBranch.branch, mrLink);
+        logger.success(`${branchInfo.taskId} completed successfully`);
+
+      } catch (error) {
+        logger.error(`Failed to process ${branchInfo.taskId}: ${error.message}`);
+        const branchLabel = createdBranch || buildReleaseBranchName(branchInfo.branchName, config.git.branchPrefix);
+        releaseStatus.markNoProcede(branchInfo.taskId, branchLabel, [error.message]);
+        // Errors before the push leave an unpushed branch behind (push failures are handled above
+        // and keep the branch as PROCEDE), so it's safe to discard
+        if (createdBranch) {
+          emptyBranches.push(createdBranch);
         }
       }
-
-      releaseStatus.markProcede(branchInfo.taskId, releaseBranch.branch, mrLink);
-      logger.success(`${branchInfo.taskId} completed successfully`);
-
-    } catch (error) {
-      logger.error(`Failed to process ${branchInfo.taskId}: ${error.message}`);
-      releaseStatus.markNoProcede(branchInfo.taskId, 'unknown', [error.message]);
     }
+  } finally {
+    // Always leave the repo where the user started, even if something above threw
+    await restoreStartingPoint(startingPoint, emptyBranches);
   }
 
   // Display summary
