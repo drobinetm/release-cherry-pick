@@ -40,6 +40,7 @@ program
           logger.info('Current configuration:');
           const shown = JSON.parse(JSON.stringify(config));
           shown.gitlab.token = maskSecret(shown.gitlab.token);
+          shown.ai.apiKey = maskSecret(shown.ai.apiKey);
           console.log(JSON.stringify(shown, null, 2));
         } else {
           logger.warn('No configuration found');

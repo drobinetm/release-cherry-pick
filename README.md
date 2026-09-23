@@ -116,7 +116,7 @@ Written to `.release-cherry-pick.json` in the project root you run the tool from
 }
 ```
 
-`ai.provider`/`ai.model` are empty by default: with AI enabled and no model saved, `release` asks you to pick a provider and model once and saves them. `ai.baseURL` is empty too, so each provider uses its own API endpoint unless you override it. `config --show` masks `gitlab.token` (e.g. `glpat-****WxYz`).
+`ai.provider`/`ai.model` are empty by default: with AI enabled and no model saved, `release` asks you to pick a provider and model once and saves them. `ai.baseURL` is empty too, so each provider uses its own API endpoint unless you override it. `config --show` masks `gitlab.token` and `ai.apiKey` (e.g. `glpat-****WxYz`, `sk-ant-****9z8y`), and the wizard hides both while you type them.
 
 Any option missing from the file is filled in from these defaults when it's loaded, so config files written by older versions keep working; the merged result is validated up front, and every problem (wrong type, invalid value) is reported in a single clear error.
 

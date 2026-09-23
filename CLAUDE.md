@@ -41,7 +41,8 @@ A cherry-pick can also come back **empty** (git: "The previous cherry-pick is no
 
 ## Conventions
 
-- Always log via `src/utils/logger.js`, not raw `console.log` (a couple of `console.log(JSON.stringify(...))` calls exist only for `config --show`, which prints a copy with `gitlab.token` masked via `maskSecret` in `src/utils/secrets.js`).
+- Always log via `src/utils/logger.js`, not raw `console.log` (a couple of `console.log(JSON.stringify(...))` calls exist only for `config --show`, which prints a copy with `gitlab.token` and `ai.apiKey` masked via `maskSecret` in `src/utils/secrets.js`).
+- Secret prompts (GitLab token, AI API key) must use Inquirer `type: 'password'` with `mask: '*'` — in inquirer 8, `mask` on a `type: 'input'` prompt is silently ignored and the secret is echoed in clear.
 - AI defaults: `ai.provider`/`ai.model`/`ai.baseURL` default to `''` on purpose — `ensureAiSettings` (in `setup.js`) prompts for provider/model at release time when AI is enabled and they're missing, and an empty `baseURL` lets `resolveBaseURL` pick each provider's own endpoint (a non-empty `config.ai.baseURL` wins for *any* provider).
 - Errors: throw the appropriate `AppError` subclass; top-level handlers in `src/index.js` catch, log `error.message`, and `process.exit(1)`.
 - Config is plaintext JSON in the target repo (`.release-cherry-pick.json`) — `gitlab.token` (PAT with `api` scope; can also come from `GITLAB_TOKEN` env) and optional `gitlab.host` for self-managed GitLab; project id is resolved from the `origin` remote, not stored.

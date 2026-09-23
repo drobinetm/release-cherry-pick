@@ -72,7 +72,7 @@ async function promptAiProviderAndModel(config) {
     if (!apiKey) {
       const { enteredKey } = await inquirer.prompt([
         {
-          type: 'input',
+          type: 'password',
           name: 'enteredKey',
           message: envKeyNames.length
             ? `API key for ${provider.name} (env ${envKeyNames.join(' or ')} not set):`
@@ -241,7 +241,7 @@ async function setupWizard() {
       default: config.gitlab.host
     },
     {
-      type: 'input',
+      type: 'password',
       name: 'gitlabToken',
       message: 'GitLab personal access token, scope "api" (leave blank to keep current / use GITLAB_TOKEN env):',
       mask: '*',

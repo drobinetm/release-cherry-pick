@@ -111,7 +111,7 @@ async function ensureAuthenticated(config) {
     logger.warn('No GitLab token found (gitlab.token / GITLAB_TOKEN)');
     const { enteredToken } = await inquirer.prompt([
       {
-        type: 'input',
+        type: 'password',
         name: 'enteredToken',
         message: 'GitLab personal access token (scope "api"), leave blank to abort:',
         mask: '*',
