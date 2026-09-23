@@ -82,7 +82,7 @@ async function validateBranchExists(branchName) {
     return result.all.some(branch => 
       branch === `origin/${branchName}` || branch === branchName
     );
-  } catch (error) {
+  } catch {
     return false;
   }
 }

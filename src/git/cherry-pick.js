@@ -113,7 +113,7 @@ async function getConflictingFiles() {
   try {
     const status = await git.status();
     return status.conflicted;
-  } catch (error) {
+  } catch {
     return [];
   }
 }

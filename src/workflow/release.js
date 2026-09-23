@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const inquirer = require('inquirer');
 const logger = require('../utils/logger');
-const { loadConfig, configExists, saveConfig } = require('../config/loader');
+const { loadConfig, saveConfig } = require('../config/loader');
 const { setupWizard, ensureAiSettings } = require('../config/setup');
 const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
@@ -18,7 +18,6 @@ const ReleaseStatus = require('../git/release-status');
 const { generateMarkdownSummary } = require('../report/summary');
 const { generateAgentsMd } = require('../doc/agents-generator');
 const { generateRpdMd } = require('../doc/rpd-generator');
-const { ConfigError } = require('../utils/errors');
 
 async function runRelease(options = {}) {
   logger.header('Release Cherry-Pick');

@@ -1,6 +1,6 @@
 'use strict';
 
-const { parseBranchListFile, parseBranchLine, getBranchNameFromTaskId } = require('./src/git/branch-parser');
+const { parseBranchLine, getBranchNameFromTaskId } = require('./src/git/branch-parser');
 const ReleaseStatus = require('./src/git/release-status');
 const { generateMarkdownSummary } = require('./src/report/summary');
 const { generateAgentsContent } = require('./src/doc/agents-generator');
