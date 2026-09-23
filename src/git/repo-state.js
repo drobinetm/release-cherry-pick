@@ -39,7 +39,11 @@ async function captureStartingPoint() {
   if (changed.length > 0) {
     const list = changed.slice(0, 10).map(file => `  - ${file.path}`).join('\n');
     const more = changed.length > 10 ? `\n  ...and ${changed.length - 10} more` : '';
-    throw new GitError(`You have uncommitted changes. Commit or stash them before running a release:\n${list}${more}`);
+    // saveConfig adds the config file to .gitignore, which leaves .gitignore modified
+    const hint = changed.some(file => file.path === '.gitignore')
+      ? '\n(If the .gitignore change is the .release-cherry-pick.json entry added by this tool, just commit it.)'
+      : '';
+    throw new GitError(`You have uncommitted changes. Commit or stash them before running a release:\n${list}${more}${hint}`);
   }
 
   if (status.detached) {

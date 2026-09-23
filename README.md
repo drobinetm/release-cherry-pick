@@ -81,7 +81,7 @@ The tool resolves each task ID to its real remote branch automatically (asking y
 
 ### Configuration file
 
-Written to `.release-cherry-pick.json` in the project root you run the tool from:
+Written to `.release-cherry-pick.json` in the project root you run the tool from. Since it can hold secrets (`gitlab.token`, `ai.apiKey`) and per-developer settings, every save also makes sure the project's `.gitignore` lists it (creating `.gitignore` if there isn't one) — commit that `.gitignore` change. If the config file was already committed, the tool warns you to untrack it with `git rm --cached .release-cherry-pick.json`.
 
 ```json
 {
