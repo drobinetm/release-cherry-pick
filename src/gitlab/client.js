@@ -9,44 +9,78 @@ const { saveConfig } = require('../config/loader');
 const git = simpleGit();
 const DEFAULT_HOST = 'gitlab.com';
 
-function getApiBase(config) {
-  const host = (config.gitlab && config.gitlab.host) || DEFAULT_HOST;
+function getToken(config) {
+  return (config.gitlab && config.gitlab.token) || process.env.GITLAB_TOKEN || '';
+}
+
+// Parses a git remote URL into { host, projectPath }. Handles SCP-like SSH remotes
+// (git@host:group/proj.git) and scheme URLs (https://[user@]host[:port]/group/proj.git,
+// ssh://git@host:2222/group/proj.git). Only http(s) keeps the port in `host`: an SSH port isn't
+// where the web API lives. Returns null if the URL can't be parsed.
+function parseRemoteUrl(url) {
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(url);
+  if (!hasScheme) {
+    // SCP-like syntax: "[user@]host:path" (checking for a scheme first matters: "https://..."
+    // contains ":" too, which used to be misread as SCP syntax)
+    const scp = url.match(/^(?:[^@/]+@)?([^:/]+):(.+)$/);
+    return scp ? { host: scp[1], projectPath: normalizeProjectPath(scp[2]) } : null;
+  }
+
+  try {
+    const parsed = new URL(url);
+    const isHttp = /^https?:$/.test(parsed.protocol);
+    return { host: isHttp ? parsed.host : parsed.hostname, projectPath: normalizeProjectPath(parsed.pathname) };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProjectPath(projectPath) {
+  return decodeURIComponent(projectPath).replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
+}
+
+// Reads and parses the `origin` remote (once per run; it doesn't change during a release).
+let originRemotePromise = null;
+function getOriginRemote() {
+  if (!originRemotePromise) {
+    originRemotePromise = (async () => {
+      let url;
+      try {
+        url = (await git.raw(['remote', 'get-url', 'origin'])).trim();
+      } catch (error) {
+        throw new GitLabError(`Could not read git remote "origin": ${error.message}`);
+      }
+      const remote = parseRemoteUrl(url);
+      if (!remote || !remote.projectPath) {
+        throw new GitLabError(`Could not derive the GitLab project from the origin remote: ${url}`);
+      }
+      return { url, ...remote };
+    })();
+    originRemotePromise.catch(() => { originRemotePromise = null; });
+  }
+  return originRemotePromise;
+}
+
+// API base URL: gitlab.host from config when set (needed e.g. when the SSH remote uses a
+// ~/.ssh/config alias instead of the real host), otherwise the host of the origin remote, so a
+// self-managed instance works without configuring anything; gitlab.com as a last resort.
+async function getApiBase(config) {
+  let host = config.gitlab && config.gitlab.host;
+  if (!host) {
+    try {
+      host = (await getOriginRemote()).host;
+    } catch {
+      host = DEFAULT_HOST;
+    }
+  }
   const trimmed = String(host).trim().replace(/\/+$/, '');
   const origin = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   return `${origin}/api/v4`;
 }
 
-function getToken(config) {
-  return (config.gitlab && config.gitlab.token) || process.env.GITLAB_TOKEN || '';
-}
-
-// Resolves the project path (e.g. "group/sub/proj") from the `origin` remote URL,
-// URL-encoding it for use as `:id` in GitLab API paths.
+// Project path (e.g. "group/sub/proj") from the `origin` remote, URL-encoded for use as `:id`.
 async function getProjectPathId() {
-  let url;
-  try {
-    url = (await git.raw(['remote', 'get-url', 'origin'])).trim();
-  } catch (error) {
-    throw new GitLabError(`Could not read git remote "origin": ${error.message}`);
-  }
-
-  let projectPath;
-  if (url.includes(':')) {
-    // SCP-like: git@host:group/proj.git
-    projectPath = url.slice(url.indexOf(':') + 1);
-  } else {
-    try {
-      projectPath = new URL(url).pathname;
-    } catch {
-      throw new GitLabError(`Could not parse origin remote URL: ${url}`);
-    }
-  }
-
-  projectPath = projectPath.replace(/^\/+/, '').replace(/\.git$/, '');
-  if (!projectPath) {
-    throw new GitLabError(`Could not derive project path from origin remote: ${url}`);
-  }
-  return encodeURIComponent(projectPath);
+  return encodeURIComponent((await getOriginRemote()).projectPath);
 }
 
 async function apiRequest(config, path, { method = 'GET', body } = {}) {
@@ -57,7 +91,7 @@ async function apiRequest(config, path, { method = 'GET', body } = {}) {
     );
   }
 
-  const base = getApiBase(config);
+  const base = await getApiBase(config);
   let response;
   try {
     response = await fetch(`${base}${path}`, {
@@ -81,7 +115,10 @@ async function apiRequest(config, path, { method = 'GET', body } = {}) {
     throw new GitLabError(`GitLab permission denied (403): ${text.slice(0, 300)}`);
   }
   if (response.status === 404) {
-    throw new GitLabError('GitLab resource not found (404): check gitlab.host, origin remote, and token access');
+    // GitLab also answers 404 (not 403) for projects the token can't see
+    throw new GitLabError(
+      `GitLab resource not found (404) at ${base}${path.split('?')[0]}: check gitlab.host, the origin remote, and that the token's user can access the project`
+    );
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -249,5 +286,6 @@ module.exports = {
   getProjectMembers,
   createMergeRequest,
   getApiBase,
-  getToken
+  getToken,
+  parseRemoteUrl
 };

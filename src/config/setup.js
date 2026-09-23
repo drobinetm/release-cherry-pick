@@ -237,7 +237,7 @@ async function setupWizard() {
     {
       type: 'input',
       name: 'gitlabHost',
-      message: 'GitLab hostname (leave blank for gitlab.com):',
+      message: 'GitLab hostname (leave blank to use the host of the origin remote):',
       default: config.gitlab.host
     },
     {
