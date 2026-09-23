@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Creates a disposable local sandbox to exercise release-cherry-pick without touching any real repo:
 #   origin.git  bare repo that stands in for GitLab
-#   work/       clone where the tool is run (config has autoCreateMR: false, so no glab/GitLab calls)
+#   work/       clone where the tool is run (config has autoCreateMR: false, so no push or GitLab API calls)
 # Usage: bash scripts/sandbox/make-sandbox.sh [sandbox-dir]   (default: $TMPDIR/release-cherry-pick-sandbox)
 set -e
 ROOT="${1:-${TMPDIR:-/tmp}/release-cherry-pick-sandbox}"

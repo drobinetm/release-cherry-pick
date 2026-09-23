@@ -178,29 +178,37 @@ async function getProjectMembers(config) {
   }
 }
 
+// Maps usernames to GitLab user IDs (the MR API takes IDs), warning about and skipping unknown ones.
+function usernamesToIds(usernames, memberList, role) {
+  const ids = [];
+  const missing = [];
+  for (const username of usernames) {
+    const match = memberList.find((m) => m.username.toLowerCase() === username.toLowerCase());
+    if (match) {
+      ids.push(match.id);
+    } else {
+      missing.push(username);
+    }
+  }
+  if (missing.length > 0) {
+    logger.warn(`${role}(s) not found in project members (skipped): ${missing.join(', ')}`);
+  }
+  return ids;
+}
+
 async function createMergeRequest(
   config,
-  { sourceBranch, targetBranch, title, description, reviewers = [], squash = true, removeSourceBranch = true, members = null }
+  { sourceBranch, targetBranch, title, description, reviewers = [], assignees = [], squash = true, removeSourceBranch = true, members = null }
 ) {
   try {
     const projectId = await getProjectPathId();
 
-    let reviewerIds = [];
-    if (reviewers.length > 0) {
-      const memberList = members || (await getProjectMembers(config));
-      reviewerIds = reviewers
-        .map((username) => {
-          const match = memberList.find((m) => m.username === username);
-          return match ? match.id : null;
-        })
-        .filter((id) => id !== null);
-      const missing = reviewers.filter(
-        (username) => !memberList.some((m) => m.username === username)
-      );
-      if (missing.length > 0) {
-        logger.warn(`Reviewer(s) not found in project members (skipped): ${missing.join(', ')}`);
-      }
+    let memberList = members;
+    if (!memberList && (reviewers.length > 0 || assignees.length > 0)) {
+      memberList = await getProjectMembers(config);
     }
+    const reviewerIds = reviewers.length > 0 ? usernamesToIds(reviewers, memberList, 'Reviewer') : [];
+    const assigneeIds = assignees.length > 0 ? usernamesToIds(assignees, memberList, 'Assignee') : [];
 
     const body = {
       source_branch: sourceBranch,
@@ -212,6 +220,9 @@ async function createMergeRequest(
     };
     if (reviewerIds.length > 0) {
       body.reviewer_ids = reviewerIds;
+    }
+    if (assigneeIds.length > 0) {
+      body.assignee_ids = assigneeIds;
     }
 
     const mr = await apiRequest(config, `/projects/${projectId}/merge_requests`, {

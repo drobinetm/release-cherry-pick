@@ -41,10 +41,15 @@ function validateConfig(config, source = 'configuration') {
     }
 
     expect(gitlab.host, 'gitlab.host', isString, 'a string');
+    expect(gitlab.token, 'gitlab.token', isString, 'a string');
 
+    // provider/model may be empty: the wizard saves them blank when AI is off, and
+    // ensureAiSettings asks for them at release time when AI is on but they're missing
     expect(ai.enabled, 'ai.enabled', isBoolean, 'true or false');
+    expect(ai.provider, 'ai.provider', isString, 'a string');
     expect(ai.apiKey, 'ai.apiKey', isString, 'a string');
-    expect(ai.model, 'ai.model', isNonEmptyString, 'a non-empty string');
+    expect(ai.model, 'ai.model', isString, 'a string');
+    expect(ai.baseURL, 'ai.baseURL', isString, 'a string');
 
     expect(release.autoCreateMR, 'release.autoCreateMR', isBoolean, 'true or false');
     expect(release.mrTitleFormat, 'release.mrTitleFormat', isNonEmptyString, 'a non-empty string');
@@ -52,6 +57,7 @@ function validateConfig(config, source = 'configuration') {
     expect(release.mrRemoveSourceBranch, 'release.mrRemoveSourceBranch', isBoolean, 'true or false');
     expect(release.defaultReviewers, 'release.defaultReviewers', isStringArray, 'a list of GitLab usernames');
     expect(release.defaultAssignees, 'release.defaultAssignees', isStringArray, 'a list of GitLab usernames');
+    expect(release.branches, 'release.branches', isStringArray, 'a list of branch names');
 
     if (release.defaultReviewerPattern !== undefined) {
       try {
@@ -60,30 +66,6 @@ function validateConfig(config, source = 'configuration') {
         errors.push(`release.defaultReviewerPattern is not a valid regular expression: ${error.message}`);
       }
     }
-  }
-
-  if (config.release && config.release.branches !== undefined && !Array.isArray(config.release.branches)) {
-    errors.push('release.branches must be an array');
-  }
-
-  if (config.gitlab && config.gitlab.host !== undefined && typeof config.gitlab.host !== 'string') {
-    errors.push('gitlab.host must be a string');
-  }
-
-  if (config.gitlab && config.gitlab.token !== undefined && typeof config.gitlab.token !== 'string') {
-    errors.push('gitlab.token must be a string');
-  }
-
-  if (config.ai && config.ai.provider !== undefined && typeof config.ai.provider !== 'string') {
-    errors.push('ai.provider must be a string');
-  }
-
-  if (config.ai && config.ai.model !== undefined && typeof config.ai.model !== 'string') {
-    errors.push('ai.model must be a string');
-  }
-
-  if (config.ai && config.ai.baseURL !== undefined && typeof config.ai.baseURL !== 'string') {
-    errors.push('ai.baseURL must be a string');
   }
 
   if (errors.length > 0) {

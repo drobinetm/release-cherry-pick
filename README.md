@@ -118,7 +118,7 @@ Written to `.release-cherry-pick.json` in the project root you run the tool from
 
 Any option missing from the file is filled in from these defaults when it's loaded, so config files written by older versions keep working; the merged result is validated up front, and every problem (wrong type, invalid value) is reported in a single clear error.
 
-`config --init` asks for every option above. When `autoCreateMR` is on, it connects through `glab` and lists the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. If `glab` isn't installed/authenticated or the call fails, it falls back to typing comma-separated usernames. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
+`config --init` asks for every option above. When `autoCreateMR` is on, it uses the GitLab token (the one just entered, or `GITLAB_TOKEN`) to list the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. If there's no token yet or the API call fails, it falls back to typing comma-separated usernames. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
 
 GitLab authentication uses a personal access token stored in `gitlab.token` (or the `GITLAB_TOKEN` environment variable, which takes effect when the config value is empty). `gitlab.host` is only needed for a self-managed instance (leave blank for gitlab.com). The project path is resolved from the `origin` remote URL — no `projectId` is stored. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
 
@@ -134,7 +134,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    ```bash
    find src -name "*.js" -exec node --check {} \;
    ```
-3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID). Its config has `autoCreateMR: false`, so nothing is pushed and `glab`/GitLab is never called:
+3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
    ```bash
    npm run sandbox:create                                  # (re)creates it in $TMPDIR/release-cherry-pick-sandbox
    npm run sandbox:run -- -b "PB-100,hotfix/PB-I200-favicon,PB-300,PB-400,PB-500,feature/refactor"
@@ -144,11 +144,11 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    `sandbox:run` auto-answers every prompt (list → first choice, checkbox → the checked choices or all if none are, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
 
    Two more flags work with both `sandbox:run` and `sandbox:config` (the setup wizard, whose prompts default to their current values):
-   - `--fake-glab` replaces the `glab` CLI with a fake (authenticated, fixed member list; `mr create` prints the exact arguments it received and returns a fake URL), so the member-selection and MR-creation code runs end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
+   - `--fake-gitlab` intercepts `fetch()` calls to the GitLab REST API (`/user`, project members, `POST merge_requests` — which prints the request body it received and returns a fake URL) and sets a fake `GITLAB_TOKEN`, so the real client, member-selection and MR-creation code run end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
    - `--answer name=value` forces the answer of a prompt by name (value parsed as JSON when possible).
    ```bash
-   npm run sandbox:config -- --fake-glab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'
-   npm run sandbox:run -- --fake-glab -b "PB-100,PB-300"   # shows the `glab mr create` call, incl. --reviewer/--assignee
+   npm run sandbox:config -- --fake-gitlab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'
+   npm run sandbox:run -- --fake-gitlab -b "PB-100,PB-300"   # shows the MR request body, incl. reviewer_ids/assignee_ids
    ```
 4. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
    ```bash

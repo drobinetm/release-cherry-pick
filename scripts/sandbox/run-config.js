@@ -3,8 +3,8 @@
 // Runs the setup wizard (config --init) against the sandbox, answering every prompt with its
 // default unless forced with --answer. See harness.js for common flags.
 // Usage:
-//   node scripts/sandbox/run-config.js --fake-glab --answer autoCreateMR=true
-//   node scripts/sandbox/run-config.js --answer autoCreateMR=true      (no glab -> manual usernames)
+//   node scripts/sandbox/run-config.js --fake-gitlab --answer autoCreateMR=true
+//   node scripts/sandbox/run-config.js --answer autoCreateMR=true      (no GitLab token -> manual usernames)
 
 const fs = require('fs');
 const { setup } = require('./harness');

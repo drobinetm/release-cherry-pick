@@ -107,7 +107,7 @@ async function runRelease(options = {}) {
       ]);
 
       if (useSaved) {
-        const remoteBranches = await getRemoteBranches();
+        const remoteBranches = await getRemoteBranches(config.git.branchPrefix);
         for (const saved of savedBranches) {
           if (remoteBranches.includes(saved)) {
             selectedBranches.push(saved);
@@ -125,7 +125,7 @@ async function runRelease(options = {}) {
     }
 
     if (selectedBranches.length === 0) {
-      selectedBranches = await selectBranchesInteractively();
+      selectedBranches = await selectBranchesInteractively(config.git.branchPrefix);
       if (selectedBranches.length === 0) {
         logger.warn('No branches selected');
         return;
@@ -150,11 +150,7 @@ async function runRelease(options = {}) {
       }
     }
 
-    branches = selectedBranches.map(branch => ({
-      taskId: branch.split('/').pop().toUpperCase(),
-      description: branch,
-      branchName: branch
-    }));
+    branches = selectedBranches.map(branch => branchInfoFromName(branch, config)).filter(Boolean);
   }
 
   // Process each branch

@@ -5,7 +5,7 @@ const { searchableList } = require('../utils/prompts');
 const { loadConfig, saveConfig } = require('./loader');
 const { getDefaultConfig } = require('./defaults');
 const { validateConfig } = require('./validator');
-const glab = require('../glab/client');
+const gitlab = require('../gitlab/client');
 const { findDefaultReviewers } = require('../gitlab/reviewer-selector');
 const logger = require('../utils/logger');
 const {
@@ -321,9 +321,18 @@ async function setupWizard() {
           baseURL: config.ai.baseURL || ''
         },
     release: {
-      ...config.release
+      ...config.release,
+      autoCreateMR: answers.autoCreateMR
     }
   };
+
+  if (answers.autoCreateMR) {
+    newConfig.release.mrTitleFormat = answers.mrTitleFormat;
+    newConfig.release.mrSquash = answers.mrSquash;
+    newConfig.release.mrRemoveSourceBranch = answers.mrRemoveSourceBranch;
+
+    await selectDefaultMembers(newConfig);
+  }
 
   const { reviewAction } = await inquirer.prompt([
     {
@@ -361,7 +370,7 @@ async function setupWizard() {
 }
 
 // Sets release.defaultReviewers / release.defaultAssignees, picking from the real GitLab project
-// members via glab when possible, or from manually typed usernames otherwise.
+// members (REST API, with the token just configured) when possible, or typed usernames otherwise.
 async function selectDefaultMembers(config) {
   const release = config.release;
   const members = await fetchProjectMembers(config);
@@ -392,10 +401,16 @@ async function selectDefaultMembers(config) {
 }
 
 async function fetchProjectMembers(config) {
+  // Not gitlab.ensureAuthenticated(): it prompts for a token and saves the config to disk, which
+  // would bypass the wizard's review/cancel step. Without a token, fall back to typed usernames.
+  if (!gitlab.getToken(config)) {
+    logger.warn('No GitLab token configured (gitlab.token / GITLAB_TOKEN), so project members can\'t be listed; enter usernames manually instead.');
+    return null;
+  }
+
   try {
-    await glab.ensureAuthenticated(config);
     logger.info('Loading GitLab project members...');
-    const members = await glab.getProjectMembers();
+    const members = await gitlab.getProjectMembers(config);
     if (members.length === 0) {
       logger.warn('The GitLab project has no members to choose from; enter usernames manually instead.');
       return null;
