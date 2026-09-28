@@ -10,17 +10,17 @@ const {
 } = require('../config/ai-providers');
 
 function buildPrompt(taskId, description, commitLines) {
-  return `You are generating a GitLab merge request title and description for a release cherry-pick.
-Task ID: ${taskId}
-Task description: ${description}
-Commits included:
+  return `Estás generando el título y la descripción de un merge request de GitLab para un cherry-pick de release.
+ID de tarea: ${taskId}
+Descripción de la tarea: ${description}
+Commits incluidos:
 ${commitLines}
 
-Write:
-1. A concise MR title, max ~72 chars, starting with "[${taskId}] " followed by a short summary.
-2. A clear Markdown MR description summarizing the change and referencing ${taskId}.
+Escribe, en español:
+1. Un título de MR conciso, máx. ~72 caracteres, que empiece con "[${taskId}] " seguido de un resumen breve.
+2. Una descripción de MR clara en Markdown, en español, que resuma el cambio y haga referencia a ${taskId}.
 
-Return ONLY JSON, no markdown fences, matching exactly: {"title": "...", "description": "..."}`;
+Devuelve SOLO JSON, sin fences de markdown, exactamente así: {"title": "...", "description": "..."}`;
 }
 
 async function generateWithAnthropic({ apiKey, model, prompt, baseURL }) {

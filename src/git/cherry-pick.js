@@ -95,15 +95,26 @@ async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null) {
     if (baseBranch) {
       args.push('--not', `origin/${baseBranch}`);
     }
-    // git log lists newest-first by default; --reverse gives chronological (oldest-first)
-    // order, which is required for cherry-picking a sequence of dependent commits correctly.
-    args.push('--reverse');
 
-    const log = await git.log(args);
     // git's --grep matches any line of the message, so a commit whose body (not title) has a line
     // starting with "[TASK-ID]" would match too; keep only the ones tagged in the title
     // (simple-git's `message` is the subject line).
     const tagged = taggedSubjectRegex(taskId);
+
+    // A merge commit tagged "[TASK-ID] ..." (e.g. the merge GitLab creates for the MR itself)
+    // can't be cherry-picked as a plain single-parent diff — `git cherry-pick` requires an
+    // explicit `-m <parent>` for it, and blindly picking "the first parent" would silently apply
+    // the wrong diff. Warn about it and leave it out rather than failing the whole branch.
+    const merges = await git.log([...args, '--merges', '--reverse']);
+    const mergeMatches = merges.all.filter(commit => tagged.test(commit.message));
+    if (mergeMatches.length > 0) {
+      const list = mergeMatches.map(c => `${c.hash.slice(0, 8)} ${c.message}`).join('; ');
+      logger.warn(`${mergeMatches.length} merge commit(s) on ${sourceBranch} are tagged "[${taskId}] ..." but can't be cherry-picked directly (a merge needs "-m <parent>") — skipped: ${list}`);
+    }
+
+    // git log lists newest-first by default; --reverse gives chronological (oldest-first)
+    // order, which is required for cherry-picking a sequence of dependent commits correctly.
+    const log = await git.log([...args, '--no-merges', '--reverse']);
     return log.all
       .filter(commit => tagged.test(commit.message))
       .map(commit => ({

@@ -12,6 +12,7 @@ const { buildReleaseBranchName, createReleaseBranch, pushBranch } = require('../
 const { captureStartingPoint, restoreStartingPoint, runInterruptible } = require('../git/repo-state');
 const { cherryPickCommits, getCommitsToCherryPick, findLooseTaskCommits, orderCommitsByHistory } = require('../git/cherry-pick');
 const gitlab = require('../gitlab/client');
+const { configureGitCredentials } = require('../git/git-auth');
 const { selectReviewer } = require('../gitlab/reviewer-selector');
 const { createMR } = require('../gitlab/mr-creator');
 const ReleaseStatus = require('../git/release-status');
@@ -58,6 +59,11 @@ async function runRelease(options = {}) {
   if (config.release.autoCreateMR) {
     await gitlab.ensureAuthenticated(config);
   }
+
+  // If a GitLab token is configured (or entered just above), reuse it to authenticate git
+  // fetch/pull/push against origin too, so an HTTPS remote doesn't prompt for a username/password
+  // on every git operation for the rest of this run.
+  await configureGitCredentials(config);
 
   // Get branches to process
   let branches = [];

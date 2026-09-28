@@ -11,7 +11,7 @@ function buildFallbackTitle(config, taskId, description) {
 }
 
 function buildFallbackDescription(taskId, description, commits) {
-  let mrDescription = `## ${taskId}: ${description}\n\n### Commits included:\n\n`;
+  let mrDescription = `## ${taskId}: ${description}\n\n### Commits incluidos:\n\n`;
   for (const commit of commits) {
     mrDescription += `- ${commit.hash}: ${commit.message}\n`;
   }
