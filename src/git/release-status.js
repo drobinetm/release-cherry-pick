@@ -68,6 +68,13 @@ class ReleaseStatus {
     return this.results.filter(r => r.status === 'SKIPPED').length;
   }
 
+  // Release branches actually left behind by this run: only PROCEDE ones were pushed and kept —
+  // CONFLICT/SKIPPED/NO PROCEDE branches are either never created or deleted again as empty
+  // (see restoreStartingPoint in git/repo-state.js).
+  getCreatedBranches() {
+    return this.results.filter(r => r.status === 'PROCEDE').map(r => r.branch);
+  }
+
   getSummary() {
     return {
       total: this.results.length,

@@ -197,6 +197,50 @@ async function runRelease(options = {}) {
         unfinishedBranch = createdBranch;
         if (signal.interrupted) break;
 
+        if (options.listBranches) {
+          // -l: skip cherry-pick entirely. The release branch is left identical to staging —
+          // it's only a reserved name for this task — and the MR is opened straight from the
+          // original source branch into staging, so GitLab (not this tool) does the actual merge.
+          let mrLink = null;
+          if (config.release.autoCreateMR) {
+            try {
+              await pushBranch(releaseBranch.branch);
+              unfinishedBranch = null;
+              if (signal.interrupted) break;
+
+              if (!projectMembers) {
+                projectMembers = await gitlab.getProjectMembers(config);
+              }
+              const reviewers = await selectReviewer(projectMembers, config.release);
+              if (signal.interrupted) break;
+
+              // Commits are only read to build the MR description text, nothing is cherry-picked
+              // here — so merge commits are kept in the list instead of being excluded/warned
+              // about as "can't cherry-pick a merge", which wouldn't apply in this mode.
+              const commits = await getCommitsToCherryPick(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch, { excludeMerges: false });
+
+              const mr = await createMR(config, {
+                sourceBranch: branchInfo.branchName,
+                targetBranch: config.git.stagingBranch,
+                taskId: branchInfo.taskId,
+                description: branchInfo.description,
+                commits,
+                reviewers,
+                members: projectMembers
+              });
+              mrLink = mr.url;
+            } catch (error) {
+              if (signal.interrupted) break;
+              logger.warn(`Failed to create MR: ${error.message}`);
+            }
+          }
+
+          releaseStatus.markProcede(branchInfo.taskId, releaseBranch.branch, mrLink);
+          unfinishedBranch = null;
+          logger.success(`${branchInfo.taskId} completed successfully (no cherry-pick — MR opened from ${branchInfo.branchName})`);
+          continue;
+        }
+
         // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging,
         // plus — if the user agrees — the ones mentioning the task without following the convention
         const commits = await selectTaskCommits(branchInfo, config, releaseStatus);
@@ -282,6 +326,20 @@ async function runRelease(options = {}) {
 
   // Display summary
   releaseStatus.displaySummary();
+
+  // Optional final recap: just the release branches this run actually created and kept (PROCEDE),
+  // handy for scripting/copy-paste instead of parsing the full status report above.
+  if (options.listBranches) {
+    const createdBranches = releaseStatus.getCreatedBranches();
+    logger.header('Release Branches Created');
+    if (createdBranches.length === 0) {
+      logger.info('No release branches were created in this run');
+    } else {
+      for (const branch of createdBranches) {
+        logger.log(`  - ${branch}`);
+      }
+    }
+  }
 
   // Offer to save the report to a file so conflicts are visible outside the console too
   const { saveReport } = await inquirer.prompt([

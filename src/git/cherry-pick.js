@@ -82,7 +82,11 @@ function escapeRegex(string) {
 // develop) miss the target commit entirely. Matching by task-id tag, restricted to commits not
 // already reachable from baseBranch, reliably isolates just this task's own commit(s) regardless
 // of the branch's real topology.
-async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null) {
+// `excludeMerges` defaults to true for the real cherry-pick path, where a tagged merge commit
+// can't be picked as a plain single-parent diff and must be left out with a warning. Callers that
+// only read the commit list for text (e.g. an MR description, when nothing is actually being
+// cherry-picked) pass `excludeMerges: false` so merge commits are neither dropped nor warned about.
+async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null, { excludeMerges = true } = {}) {
   try {
     await git.fetch();
 
@@ -101,20 +105,22 @@ async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null) {
     // (simple-git's `message` is the subject line).
     const tagged = taggedSubjectRegex(taskId);
 
-    // A merge commit tagged "[TASK-ID] ..." (e.g. the merge GitLab creates for the MR itself)
-    // can't be cherry-picked as a plain single-parent diff — `git cherry-pick` requires an
-    // explicit `-m <parent>` for it, and blindly picking "the first parent" would silently apply
-    // the wrong diff. Warn about it and leave it out rather than failing the whole branch.
-    const merges = await git.log([...args, '--merges', '--reverse']);
-    const mergeMatches = merges.all.filter(commit => tagged.test(commit.message));
-    if (mergeMatches.length > 0) {
-      const list = mergeMatches.map(c => `${c.hash.slice(0, 8)} ${c.message}`).join('; ');
-      logger.warn(`${mergeMatches.length} merge commit(s) on ${sourceBranch} are tagged "[${taskId}] ..." but can't be cherry-picked directly (a merge needs "-m <parent>") — skipped: ${list}`);
+    if (excludeMerges) {
+      // A merge commit tagged "[TASK-ID] ..." (e.g. the merge GitLab creates for the MR itself)
+      // can't be cherry-picked as a plain single-parent diff — `git cherry-pick` requires an
+      // explicit `-m <parent>` for it, and blindly picking "the first parent" would silently apply
+      // the wrong diff. Warn about it and leave it out rather than failing the whole branch.
+      const merges = await git.log([...args, '--merges', '--reverse']);
+      const mergeMatches = merges.all.filter(commit => tagged.test(commit.message));
+      if (mergeMatches.length > 0) {
+        const list = mergeMatches.map(c => `${c.hash.slice(0, 8)} ${c.message}`).join('; ');
+        logger.warn(`${mergeMatches.length} merge commit(s) on ${sourceBranch} are tagged "[${taskId}] ..." but can't be cherry-picked directly (a merge needs "-m <parent>") — skipped: ${list}`);
+      }
     }
 
     // git log lists newest-first by default; --reverse gives chronological (oldest-first)
     // order, which is required for cherry-picking a sequence of dependent commits correctly.
-    const log = await git.log([...args, '--no-merges', '--reverse']);
+    const log = await git.log([...args, ...(excludeMerges ? ['--no-merges'] : []), '--reverse']);
     return log.all
       .filter(commit => tagged.test(commit.message))
       .map(commit => ({

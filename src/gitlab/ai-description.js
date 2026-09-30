@@ -16,8 +16,8 @@ Descripción de la tarea: ${description}
 Commits incluidos:
 ${commitLines}
 
-Escribe, en español:
-1. Un título de MR conciso, máx. ~72 caracteres, que empiece con "[${taskId}] " seguido de un resumen breve.
+Escribe todo el contenido en español, sin importar en qué idioma esté la descripción de la tarea o los mensajes de los commits:
+1. Un título de MR conciso, en español, máx. ~72 caracteres, que empiece con "[${taskId}] " seguido de un resumen breve.
 2. Una descripción de MR clara en Markdown, en español, que resuma el cambio y haga referencia a ${taskId}.
 
 Devuelve SOLO JSON, sin fences de markdown, exactamente así: {"title": "...", "description": "..."}`;
@@ -27,7 +27,7 @@ async function generateWithAnthropic({ apiKey, model, prompt, baseURL }) {
   const client = new Anthropic({ apiKey, baseURL: baseURL || undefined });
   const response = await client.messages.create({
     model,
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [{ role: 'user', content: prompt }]
   });
   const textBlock = response.content.find((b) => b.type === 'text');
@@ -44,7 +44,7 @@ async function generateWithGoogle({ apiKey, model, prompt }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 1024 }
+      generationConfig: { maxOutputTokens: 4096 }
     })
   });
 
@@ -77,7 +77,10 @@ async function generateWithOpenAICompatible({ apiKey, model, prompt, baseURL }) 
     },
     body: JSON.stringify({
       model,
-      max_tokens: 1024,
+      // Generous budget: some models (e.g. reasoning/"thinking" variants) spend part of
+      // max_tokens on hidden reasoning before writing the visible answer, and a small budget can
+      // leave `content` empty with finish_reason "length" even though the request "succeeded".
+      max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }]
     })
   });
@@ -88,11 +91,15 @@ async function generateWithOpenAICompatible({ apiKey, model, prompt, baseURL }) 
   }
 
   const data = await response.json();
-  const content = data.choices && data.choices[0] && data.choices[0].message
-    ? data.choices[0].message.content
-    : null;
+  const choice = data.choices && data.choices[0];
+  const content = choice && choice.message ? choice.message.content : null;
   if (!content) {
-    throw new Error('Provider response contained no content');
+    // Surface finish_reason (e.g. "length", "content_filter") so a future failure is diagnosable
+    // instead of a bare "no content" — this is what happens if max_tokens runs out before the
+    // model writes visible output, or if the provider filtered the response.
+    const finishReason = choice ? choice.finish_reason : undefined;
+    const hint = finishReason ? ` (finish_reason: ${finishReason})` : ` — raw response: ${JSON.stringify(data).slice(0, 300)}`;
+    throw new Error(`Provider response contained no content${hint}`);
   }
   return content.trim();
 }

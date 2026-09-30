@@ -16,6 +16,7 @@ program
   .description('Start the release process')
   .option('-f, --file <path>', 'Path to branch list file')
   .option('-b, --branches <branches>', 'Comma-separated list of branches')
+  .option('-l, --list-branches', 'Skip cherry-pick: create empty release branches from staging, open each MR from the source branch instead, and list the release branches created at the end')
   .action(async (options) => {
     try {
       await runRelease(options);
