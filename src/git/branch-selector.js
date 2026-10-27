@@ -1,12 +1,12 @@
 'use strict';
 
 const inquirer = require('inquirer');
-const simpleGit = require('simple-git');
+const { createGit } = require('./instance');
 const logger = require('../utils/logger');
 const { searchableCheckbox } = require('../utils/prompts');
 const { defaultConfig } = require('../config/defaults');
 
-const git = simpleGit();
+const git = createGit();
 
 // Prefixes of the branches a release can be cut from (every configured prefix except release)
 // (falls back to the defaults when none are configured).

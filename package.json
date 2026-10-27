@@ -13,6 +13,7 @@
     "sandbox:create": "bash scripts/sandbox/make-sandbox.sh",
     "sandbox:run": "node scripts/sandbox/run-release.js",
     "sandbox:config": "node scripts/sandbox/run-config.js",
+    "test:package": "node scripts/sandbox/test-package.js",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -26,7 +27,7 @@
     "release"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
@@ -38,7 +39,7 @@
     "inquirer": "^8.2.7",
     "inquirer-autocomplete-prompt": "^2.0.0",
     "inquirer-checkbox-plus-prompt": "^1.4.2",
-    "simple-git": "^3.36.0"
+    "simple-git": "^4.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

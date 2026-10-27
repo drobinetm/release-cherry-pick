@@ -1,6 +1,6 @@
 'use strict';
 
-const simpleGit = require('simple-git');
+const { createGit } = require('./instance');
 
 function getToken(config) {
   return (config && config.gitlab && config.gitlab.token) || process.env.GITLAB_TOKEN || '';
@@ -12,8 +12,10 @@ function getToken(config) {
 // not be asked for credentials again. SSH origins already authenticate via the user's key and are
 // left untouched. The header is injected only for this process, through env vars git itself reads
 // (GIT_CONFIG_COUNT/KEY/VALUE, supported since Git 2.31) — it is never written to .git/config, so
-// the token never lingers in the target repo once the CLI exits. GitLab's git-over-HTTP Basic auth
-// validates the token itself and doesn't check the username, so any non-blank placeholder works.
+// the token never lingers in the target repo once the CLI exits. simple-git v4 strips ambient GIT_*
+// variables from the child process, so those three are allow-listed in ./instance.js — without it
+// this header would be dropped silently. GitLab's git-over-HTTP Basic auth validates the token
+// itself and doesn't check the username, so any non-blank placeholder works.
 // No-op without a token configured, or when origin isn't http(s).
 async function configureGitCredentials(config) {
   const token = getToken(config);
@@ -23,7 +25,7 @@ async function configureGitCredentials(config) {
 
   let remoteUrl;
   try {
-    remoteUrl = (await simpleGit().raw(['remote', 'get-url', 'origin'])).trim();
+    remoteUrl = (await createGit().raw(['remote', 'get-url', 'origin'])).trim();
   } catch {
     return;
   }

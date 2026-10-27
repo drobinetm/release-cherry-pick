@@ -1,10 +1,10 @@
 'use strict';
 
-const simpleGit = require('simple-git');
+const { createGit } = require('./instance');
 const logger = require('../utils/logger');
 const { GitError } = require('../utils/errors');
 
-const git = simpleGit();
+const git = createGit();
 
 // Cherry-picks `commits` (in order) onto the current branch; when not given, the ones tagged
 // "[taskId]" on sourceBranch that aren't on baseBranch (see getCommitsToCherryPick).

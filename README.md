@@ -152,6 +152,11 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    npm run sandbox:config -- --fake-gitlab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'
    npm run sandbox:run -- --fake-gitlab -b "PB-100,PB-300"   # shows the MR request body, incl. reviewer_ids/assignee_ids
    ```
+
+   To validate the **published npm package** instead of the checkout — registry tarball integrity and contents (no keys, no install lifecycle scripts, MIT, secret scan, password+mask prompts), a real `npm install` of the tarball with `--version`/`--help`/`config --show`, the mutated cherry-pick flow twice (`autoCreateMR: false` → nothing pushed; `autoCreateMR: true` → push + MR body against the fake GitLab), a secrets pass (config `0600`/`0700`, no raw token in the console output, generated report or git metadata, masked `config --show`) and a final phase against the local checkout proving simple-git ≥4.0.2 with the `GIT_CONFIG_*` token header reaching git through `createGit()`:
+   ```bash
+   npm run test:package                  # prints a PASS/FAIL report; flags: --version <v>, --sandbox <dir>, --keep
+   ```
 4. **Exercise the real git flow against an isolated, disposable mirror** — never test branch creation, cherry-picking, or pushes directly against a real project. Clone a mirror of the target repo so pushes/branch deletes only touch your local disk:
    ```bash
    git clone --mirror <path-or-url-to-target-repo> /tmp/rcp-test/mirror.git
