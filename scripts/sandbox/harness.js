@@ -5,6 +5,8 @@
 //
 // Common flags:
 //   --work <dir>           sandbox clone to run in (default: $TMPDIR/release-cherry-pick-sandbox/work)
+//   --tool <dir>           tool to load instead of this checkout (e.g. an installed copy under
+//                          <prefix>/node_modules/release-cherry-pick) — inquirer is resolved from it
 //   --answer name=value    force the answer of the prompt named `name` (repeatable); value is parsed
 //                          as JSON when possible, e.g. --answer autoCreateMR=true --answer 'x=["a"]'
 //   --fake-gitlab          intercept fetch() calls to <host>/api/v4 (GET /user, project members, POST
@@ -28,10 +30,11 @@ const FAKE_MEMBERS = [
 ];
 
 function parseArgs(argv) {
-  const options = { workDir: path.join(os.tmpdir(), 'release-cherry-pick-sandbox', 'work'), answers: {}, fakeGitlab: false, rest: [] };
+  const options = { workDir: path.join(os.tmpdir(), 'release-cherry-pick-sandbox', 'work'), toolDir: TOOL_DIR, answers: {}, fakeGitlab: false, rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--work') options.workDir = path.resolve(argv[++i]);
+    else if (arg === '--tool') options.toolDir = path.resolve(argv[++i]);
     else if (arg === '--fake-gitlab') options.fakeGitlab = true;
     else if (arg === '--answer') {
       const [name, ...value] = argv[++i].split('=');
@@ -77,6 +80,7 @@ function choiceValue(choice) {
 
 function setup(argv, { confirmDefault }) {
   const options = parseArgs(argv);
+  const toolDir = options.toolDir;
 
   // simple-git captures the cwd when its modules load, so chdir before requiring the tool
   process.chdir(options.workDir);
@@ -88,7 +92,9 @@ function setup(argv, { confirmDefault }) {
     installFakeGitlab();
   }
 
-  const inquirer = require(path.join(TOOL_DIR, 'node_modules', 'inquirer'));
+  // Resolved through the tool dir so --tool works for an installed copy too, where inquirer is
+  // hoisted next to the package instead of living inside it.
+  const inquirer = require(require.resolve('inquirer', { paths: [toolDir] }));
   inquirer.prompt = async (questions, previous = {}) => {
     const answers = { ...previous };
     for (const q of [].concat(questions)) {
@@ -118,7 +124,7 @@ function setup(argv, { confirmDefault }) {
   inquirer.registerPrompt = () => {};
   inquirer.prompt.registerPrompt = () => {};
 
-  return { ...options, require: (relative) => require(path.join(TOOL_DIR, relative)) };
+  return { ...options, require: (relative) => require(path.join(toolDir, relative)) };
 }
 
 module.exports = { setup, FAKE_MEMBERS };

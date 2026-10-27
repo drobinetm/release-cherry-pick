@@ -13,6 +13,7 @@
     "sandbox:create": "bash scripts/sandbox/make-sandbox.sh",
     "sandbox:run": "node scripts/sandbox/run-release.js",
     "sandbox:config": "node scripts/sandbox/run-config.js",
+    "test:package": "node scripts/sandbox/test-package.js",
     "prepare": "husky"
   },
   "lint-staged": {
