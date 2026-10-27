@@ -1,10 +1,10 @@
 'use strict';
 
-const simpleGit = require('simple-git');
+const { createGit } = require('./instance');
 const logger = require('../utils/logger');
 const { GitError } = require('../utils/errors');
 
-const git = simpleGit();
+const git = createGit();
 
 function buildReleaseBranchName(sourceBranch, branchPrefix = {}) {
   let name = sourceBranch;

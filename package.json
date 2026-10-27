@@ -38,7 +38,7 @@
     "inquirer": "^8.2.7",
     "inquirer-autocomplete-prompt": "^2.0.0",
     "inquirer-checkbox-plus-prompt": "^1.4.2",
-    "simple-git": "^3.36.0"
+    "simple-git": "^4.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

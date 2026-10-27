@@ -1,13 +1,13 @@
 'use strict';
 
 const inquirer = require('inquirer');
-const simpleGit = require('simple-git');
+const { createGit } = require('../git/instance');
 const logger = require('../utils/logger');
 const { GitLabError } = require('../utils/errors');
 const { saveConfig } = require('../config/loader');
 const { parseRemoteUrl } = require('../git/remote-url');
 
-const git = simpleGit();
+const git = createGit();
 const DEFAULT_HOST = 'gitlab.com';
 
 function getToken(config) {

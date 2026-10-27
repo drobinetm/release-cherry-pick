@@ -2,11 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const simpleGit = require('simple-git');
+const { createGit } = require('./instance');
 const logger = require('../utils/logger');
 const { GitError } = require('../utils/errors');
 
-const git = simpleGit();
+const git = createGit();
 
 // Checks for .git/CHERRY_PICK_HEAD directly: `git rev-parse -q --verify CHERRY_PICK_HEAD` fails
 // silently (no stderr), and simple-git only rejects when stderr has content, so it can't be used.
