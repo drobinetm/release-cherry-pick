@@ -126,7 +126,11 @@ GitLab authentication uses a personal access token stored in `gitlab.token` (or 
 
 ## Testing in development
 
-There's no automated test suite yet (`npm test` is a placeholder). To validate a change:
+There's no automated test suite yet (`npm test` is a placeholder). To validate a change, first install the git hooks once per clone (the repo has no `prepare` script on purpose, so nothing hook-related ships in the published package):
+
+   ```bash
+   npm run setup                          # installs the Husky pre-commit hook (lint-staged → eslint --fix)
+   ```
 
 1. **Run the smoke script**, which exercises branch parsing, config defaults, status tracking, and report/doc generation:
    ```bash
