@@ -1,6 +1,6 @@
 {
   "name": "release-cherry-pick",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI tool for automating release cherry-pick and GitLab MR creation",
   "main": "src/index.js",
   "bin": {
