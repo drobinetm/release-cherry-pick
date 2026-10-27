@@ -3,6 +3,9 @@
   "version": "1.0.1",
   "description": "CLI tool for automating release cherry-pick and GitLab MR creation",
   "main": "src/index.js",
+  "files": [
+    "src"
+  ],
   "bin": {
     "release-cherry-pick": "./src/index.js"
   },
