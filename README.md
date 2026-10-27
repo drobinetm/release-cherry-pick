@@ -39,8 +39,18 @@ Given a list of task IDs (from a file, a `-b` flag, or interactive branch select
 ## Installation
 
 ```bash
-npm install
+npm install release-cherry-pick            # local — run it with `npx release-cherry-pick`
+npm install --global release-cherry-pick   # global — `release-cherry-pick` on your PATH
 ```
+
+Or with pnpm:
+
+```bash
+pnpm add release-cherry-pick               # local
+pnpm add --global release-cherry-pick      # global
+```
+
+To work on the CLI itself, clone the repository and run `npm install`, then `npm run setup` to install the git hooks.
 
 ## Usage
 
