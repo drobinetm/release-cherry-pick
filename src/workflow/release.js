@@ -88,12 +88,19 @@ async function runRelease(options = {}) {
       config.git.branchPrefix
     );
 
+    // Only fetched when a full branch name was given, to confirm it really exists on origin
+    let remoteBranches = null;
+
     for (const entry of entries) {
       if (isTaskId(entry)) {
         branches.push(resolved.find(b => b.taskId === entry.toUpperCase()));
       } else {
         const info = branchInfoFromName(entry, config);
         if (info) {
+          remoteBranches = remoteBranches || (await getRemoteBranches(config.git.branchPrefix));
+          if (!remoteBranches.includes(info.branchName)) {
+            info.missingReason = await describeMissingBranch(info, remoteBranches, config.git.branchPrefix);
+          }
           branches.push(info);
         }
       }
@@ -180,6 +187,16 @@ async function runRelease(options = {}) {
       if (signal.interrupted) break;
       logger.header(`Processing ${branchInfo.taskId}`);
       let createdBranch = null;
+
+      if (branchInfo.missingReason) {
+        logger.error(branchInfo.missingReason);
+        releaseStatus.markNoProcede(
+          branchInfo.taskId,
+          buildReleaseBranchName(branchInfo.branchName, config.git.branchPrefix),
+          [branchInfo.missingReason]
+        );
+        continue;
+      }
 
       try {
         // Create release branch
@@ -449,6 +466,16 @@ async function selectTaskCommits(branchInfo, config, releaseStatus) {
   releaseStatus.addNote(taskId, `${loose.length} commit(s) mention ${taskId} without the "[${taskId}] ..." convention and were ${outcome}: ${list.join('; ')}`);
 
   return includeLoose ? orderCommitsByHistory(branchName, [...tagged, ...loose], base) : tagged;
+}
+
+// Why a branch given by full name can't be released: it isn't on origin (typo, other name, already
+// deleted). Lists the remote branches of the same task so the user can spot the right name.
+async function describeMissingBranch({ branchName, taskId }, remoteBranches, branchPrefix) {
+  const similar = await resolveBranchNameForTaskId(taskId, remoteBranches, branchPrefix);
+  const hint = similar.length > 0
+    ? ` Branches on origin for ${taskId}: ${similar.join(', ')}`
+    : ` No branch on origin matches ${taskId}.`;
+  return `Branch ${branchName} not found on origin.${hint}`;
 }
 
 // Builds branch info from a full branch name, extracting its task ID; null (with a warning) if none.
