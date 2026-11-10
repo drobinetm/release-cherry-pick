@@ -31,6 +31,7 @@ function validateConfig(config, source = 'configuration') {
     const { git, gitlab, ai, release } = config;
 
     expect(git.stagingBranch, 'git.stagingBranch', isNonEmptyString, 'a non-empty string');
+    expect(git.branchSource, 'git.branchSource', v => v === 'local' || v === 'remote', '"local" or "remote"');
     if (isPlainObject(git.branchPrefix)) {
       for (const [type, prefix] of Object.entries(git.branchPrefix)) {
         expect(prefix, `git.branchPrefix.${type}`, isString, 'a string');

@@ -217,6 +217,16 @@ async function setupWizard() {
       default: config.git.stagingBranch
     },
     {
+      type: 'list',
+      name: 'branchSource',
+      message: 'Where should feature/hotfix branches be looked up?',
+      choices: [
+        { name: 'Local branches first, origin as a fallback', value: 'local' },
+        { name: 'Origin only', value: 'remote' }
+      ],
+      default: config.git.branchSource || 'local'
+    },
+    {
       type: 'input',
       name: 'featurePrefix',
       message: 'Feature branch prefix:',
@@ -297,6 +307,7 @@ async function setupWizard() {
   const newConfig = {
     git: {
       stagingBranch: answers.stagingBranch,
+      branchSource: answers.branchSource,
       branchPrefix: {
         feature: answers.featurePrefix,
         hotfix: answers.hotfixPrefix,
