@@ -86,12 +86,12 @@ function escapeRegex(string) {
 // can't be picked as a plain single-parent diff and must be left out with a warning. Callers that
 // only read the commit list for text (e.g. an MR description, when nothing is actually being
 // cherry-picked) pass `excludeMerges: false` so merge commits are neither dropped nor warned about.
-async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null, { excludeMerges = true } = {}) {
+async function getCommitsToCherryPick(sourceBranch, taskId, baseBranch = null, { excludeMerges = true, sourceRef = `origin/${sourceBranch}` } = {}) {
   try {
     await git.fetch();
 
     const args = [
-      `origin/${sourceBranch}`,
+      sourceRef,
       `--grep=^\\[${escapeRegex(taskId)}\\]`,
       '--extended-regexp',
       '--regexp-ignore-case'
@@ -147,10 +147,10 @@ const ANY_TASK_TAG = /^\[[A-Z]+-[A-Z]*\d[A-Z0-9]*\]/i;
 // cherry-picked as-is), titles tagged for another task ("[PB-701] ... PB-700"), and IDs that are
 // just a prefix of another one (PB-700 vs PB-7000). Commits with no ID at all can't be told apart
 // from unrelated history (a branch cut from an old base may carry hundreds), so they're not reported.
-async function findLooseTaskCommits(sourceBranch, taskId, baseBranch = null) {
+async function findLooseTaskCommits(sourceBranch, taskId, baseBranch = null, { sourceRef = `origin/${sourceBranch}` } = {}) {
   const id = escapeRegex(taskId);
   const args = [
-    `origin/${sourceBranch}`,
+    sourceRef,
     `--grep=(^|[^A-Za-z0-9])${id}([^A-Za-z0-9]|$)`,
     '--extended-regexp',
     '--regexp-ignore-case',
@@ -176,8 +176,8 @@ async function findLooseTaskCommits(sourceBranch, taskId, baseBranch = null) {
 
 // Returns `commits` in the order they appear on sourceBranch (oldest first), as cherry-picking a
 // mix of tagged and loose commits must follow the branch's history, not the order they were found.
-async function orderCommitsByHistory(sourceBranch, commits, baseBranch = null) {
-  const args = ['rev-list', '--reverse', `origin/${sourceBranch}`];
+async function orderCommitsByHistory(sourceBranch, commits, baseBranch = null, { sourceRef = `origin/${sourceBranch}` } = {}) {
+  const args = ['rev-list', '--reverse', sourceRef];
   if (baseBranch) {
     args.push('--not', `origin/${baseBranch}`);
   }

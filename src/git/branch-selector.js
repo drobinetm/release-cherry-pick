@@ -17,12 +17,12 @@ function getSourcePrefixes(branchPrefix) {
   return prefixes.length > 0 ? prefixes : getSourcePrefixes(defaultConfig.git.branchPrefix);
 }
 
-async function selectBranchesInteractively(branchPrefix) {
+async function selectBranchesInteractively(branchPrefix, branches = null) {
   logger.header('Branch Selection');
 
-  const branches = await getRemoteBranches(branchPrefix);
+  const list = branches || (await getRemoteBranches(branchPrefix));
 
-  if (branches.length === 0) {
+  if (list.length === 0) {
     logger.warn('No feature or hotfix branches found');
     return [];
   }
@@ -32,7 +32,7 @@ async function selectBranchesInteractively(branchPrefix) {
       name: 'selectedBranches',
       message: 'Select branches for release (type to search):',
       pageSize: 15
-    }, branches)
+    }, list)
   ]);
 
   return selectedBranches;
@@ -53,6 +53,46 @@ async function getRemoteBranches(branchPrefix) {
   } catch (error) {
     logger.error(`Error getting branches: ${error.message}`);
     return [];
+  }
+}
+
+async function getLocalBranches(branchPrefix) {
+  const prefixes = getSourcePrefixes(branchPrefix);
+  try {
+    const result = await git.branchLocal();
+    return result.all
+      .filter(branch => prefixes.some(prefix => branch.startsWith(prefix)))
+      .sort();
+  } catch (error) {
+    logger.error(`Error getting local branches: ${error.message}`);
+    return [];
+  }
+}
+
+// Every source branch the release can be cut from, keyed by name: { local, remote } says where it
+// exists. In 'local' mode both local branches and origin's are listed (a branch only on origin is
+// still usable as a fallback); in 'remote' mode only origin's, as before local mode existed.
+async function getBranchCatalog(branchPrefix, mode = 'local') {
+  const catalog = new Map();
+  const remote = await getRemoteBranches(branchPrefix);
+  for (const name of remote) {
+    catalog.set(name, { local: false, remote: true });
+  }
+  if (mode === 'local') {
+    for (const name of await getLocalBranches(branchPrefix)) {
+      catalog.set(name, { local: true, remote: catalog.has(name) });
+    }
+  }
+  return catalog;
+}
+
+// Number of commits reachable from `to` but not from `from` (0 if either ref is unknown).
+async function countCommitsBetween(from, to) {
+  try {
+    const out = await git.raw(['rev-list', '--count', `${from}..${to}`]);
+    return parseInt(out.trim(), 10) || 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -90,6 +130,9 @@ async function validateBranchExists(branchName) {
 module.exports = {
   getSourcePrefixes,
   selectBranchesInteractively,
+  getBranchCatalog,
+  countCommitsBetween,
+  getLocalBranches,
   getRemoteBranches,
   resolveBranchNameForTaskId,
   searchBranches,
