@@ -66,9 +66,14 @@ node src/index.js release --file branches.txt
 # Direct — comma-separated task IDs and/or full branch names
 node src/index.js release --branches PB-123,PB-124
 node src/index.js release --branches feature/PB-123-list-user,hotfix/PB-124-fix-favicon
+
+# Look up branches on origin only (ignore local branches)
+node src/index.js release --remote --branches PB-123
 ```
 
-A bare task ID is resolved to its real remote branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
+A bare task ID is resolved to its real branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
+
+**Where branches are looked up.** By default (`git.branchSource: "local"`) the tool looks at your **local** feature/hotfix branches first and falls back to `origin` for branches you don't have locally, so a branch you haven't pushed can be released too. Commits are cherry-picked from whichever copy was chosen; the release branch is still created from `origin/staging` and pushed, and the MR is opened from it, so the source branch never needs to be on origin. If your local copy is **behind** `origin` (someone pushed commits you haven't pulled), the tool says so and asks which version to release — `origin`'s by default — instead of silently leaving those commits out. Use `--remote` (or `git.branchSource: "remote"`) to look at `origin` only, and `--local` to force local-first when the config says `remote`. `--list-branches` opens each MR straight from the source branch, so it always looks branches up on `origin` and can't be combined with `--local`.
 
 ### Configure
 
@@ -87,7 +92,7 @@ node src/index.js config --show
 *PB-I3218*: Error al listar "Coberturas afectadas" (Configuraciones / Reclamos / Coberturas afectadas).
 ```
 
-The tool resolves each task ID to its real remote branch automatically (asking you to disambiguate if more than one branch matches).
+The tool resolves each task ID to its real branch automatically — local first, then `origin` (see above) — asking you to disambiguate if more than one branch matches.
 
 ### Configuration file
 
@@ -97,6 +102,7 @@ Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **
 {
   "git": {
     "stagingBranch": "staging",
+    "branchSource": "local",
     "branchPrefix": {
       "feature": "feature/",
       "hotfix": "hotfix/",
@@ -150,7 +156,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    ```bash
    find src -name "*.js" -exec node --check {} \;
    ```
-3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
+3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID, a local-only branch `PB-600`, and a local branch `PB-610` that is behind origin). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
    ```bash
    npm run sandbox:create                                  # (re)creates it in $TMPDIR/release-cherry-pick-sandbox
    npm run sandbox:run -- -b "PB-100,hotfix/PB-I200-favicon,PB-300,PB-400,PB-500,feature/refactor"
