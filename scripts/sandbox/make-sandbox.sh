@@ -59,6 +59,18 @@ git checkout -q staging
 echo "b-from-staging" > shared.txt && echo "same fix" > pb400.txt
 commit "staging moves on" && git push -q origin staging
 
+# PB-600: local-only source branch (deliberately not pushed to origin)
+git checkout -qb feature/PB-600-local-only staging
+echo "local source" > pb600.txt && commit "[PB-600] local-only fix"
+
+# PB-610: local copy is behind origin (a teammate pushed a second commit); the tool must ask which
+# version to release (default: origin's, which has both commits)
+git checkout -qb feature/PB-610-stale-local staging
+echo "first" > pb610.txt && commit "[PB-610] first part"
+echo "second" > pb610b.txt && commit "[PB-610] second part"
+git push -q -u origin feature/PB-610-stale-local && git reset -q --hard HEAD~1
+git checkout -q staging
+
 # The tool keeps its config outside the project (see src/config/loader.js); the sandbox's copy goes
 # in $ROOT/config instead of the real ~/.release-cherry-pick. Written through saveConfig so the file
 # gets the same per-project name the tool computes.
