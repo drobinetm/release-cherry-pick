@@ -1,7 +1,8 @@
 'use strict';
 
 const inquirer = require('inquirer');
-const { searchableList } = require('../utils/prompts');
+const { searchableList, searchableCheckbox } = require('../utils/prompts');
+const { countBranchesByPrefix } = require('../git/branch-selector');
 const { loadConfig, saveConfig, getConfigPath } = require('./loader');
 const { getDefaultConfig } = require('./defaults');
 const { validateConfig } = require('./validator');
@@ -22,6 +23,109 @@ const CUSTOM_MODEL_CHOICE = '__custom_model__';
 const BACK_CHOICE = '__back__';
 const RESTORE_SAVED_CHOICE = '__restore_saved__';
 const RESET_MODEL_CHOICE = '__reset_model__';
+const ADD_PREFIX_CHOICE = '__add_prefix__';
+
+// Offered in the source-prefix list even when this repo has no branch using them yet
+const COMMON_SOURCE_PREFIXES = ['feature/', 'hotfix/', 'bugfix/', 'feat/', 'fix/', 'chore/'];
+
+// "task" -> "task/": prefixes always end in a slash, as the branch name follows it
+function normalizePrefix(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+// Key a prefix is saved under in git.branchPrefix: "feat/" -> "feat"
+function prefixKey(prefix) {
+  return prefix.replace(/\/+$/, '');
+}
+
+function validateSourcePrefix(prefix, known, releasePrefix) {
+  if (!prefix) return 'Enter a prefix, e.g. task/';
+  if (/\s/.test(prefix)) return 'Prefixes cannot contain spaces';
+  if (prefix === releasePrefix || prefixKey(prefix) === 'release') {
+    return `${prefix} is reserved for release branches`;
+  }
+  if (known.includes(prefix)) return `${prefix} is already in the list`;
+  return true;
+}
+
+// Multi-select of the prefixes source branches can have (everything but the release prefix):
+// the configured ones (checked), the ones this repo's branches really use (with how many branches
+// each), and the common ones; "+ Add another prefix…" asks for a new one and shows the list again.
+// Returns them as git.branchPrefix entries, keeping the key each configured prefix already had.
+async function promptSourcePrefixes(config) {
+  const current = config.git.branchPrefix || {};
+  const releasePrefix = current.release || getDefaultConfig().git.branchPrefix.release;
+  const configured = Object.entries(current)
+    .filter(([type, prefix]) => type !== 'release' && prefix)
+    .map(([, prefix]) => prefix);
+  const counts = await countBranchesByPrefix();
+  // A prefix seen on a single branch is usually noise (a slash inside a branch name, a typo like
+  // "realease/"), so only prefixes shared by 2+ branches are suggested; the configured and common
+  // ones are always listed.
+  const detected = Object.keys(counts)
+    .filter(prefix => prefix !== releasePrefix && counts[prefix] >= 2)
+    .sort((a, b) => counts[b] - counts[a]);
+  const known = [...new Set([...configured, ...detected, ...COMMON_SOURCE_PREFIXES])];
+  let selected = configured.length > 0 ? configured : ['feature/', 'hotfix/'];
+
+  for (;;) {
+    const width = Math.max(...known.map(prefix => prefix.length));
+    const choices = known.map(prefix => {
+      const count = counts[prefix] || 0;
+      return {
+        name: `${prefix.padEnd(width)}  ${count} branch${count === 1 ? '' : 'es'}`,
+        value: prefix,
+        checked: selected.includes(prefix)
+      };
+    });
+    choices.push({ name: '+ Add another prefix…', value: ADD_PREFIX_CHOICE });
+
+    const { sourcePrefixes } = await inquirer.prompt([
+      searchableCheckbox({
+        name: 'sourcePrefixes',
+        message: 'Source branch prefixes (space to toggle, type to search):',
+        pageSize: 15,
+        default: selected
+      }, choices)
+    ]);
+
+    selected = sourcePrefixes.filter(prefix => prefix !== ADD_PREFIX_CHOICE);
+    if (!sourcePrefixes.includes(ADD_PREFIX_CHOICE)) {
+      if (selected.length > 0) break;
+      logger.warn('Select at least one source branch prefix');
+      continue;
+    }
+
+    const { newPrefix } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'newPrefix',
+        message: 'New source branch prefix, e.g. task/ (blank to go back):',
+        filter: normalizePrefix,
+        validate: (value) => value === '' || validateSourcePrefix(value, known, releasePrefix)
+      }
+    ]);
+    if (newPrefix) {
+      known.push(newPrefix);
+      selected.push(newPrefix);
+    }
+  }
+
+  const keyByPrefix = new Map(
+    Object.entries(current).filter(([type]) => type !== 'release').map(([type, prefix]) => [prefix, type])
+  );
+  const branchPrefix = {};
+  for (const prefix of selected) {
+    let key = keyByPrefix.get(prefix) || prefixKey(prefix);
+    for (let n = 2; key in branchPrefix || key === 'release'; n++) {
+      key = `${prefixKey(prefix)}${n}`;
+    }
+    branchPrefix[key] = prefix;
+  }
+  return branchPrefix;
+}
 
 // Sequential flow like OpenCode's /connect: list all providers → enter API key
 // (skipped when the env var is already set) → connect and list that provider's models.
@@ -209,40 +313,40 @@ async function setupWizard() {
     config.ai = getDefaultConfig().ai;
   }
 
-  const questions = [
+  const { stagingBranch } = await inquirer.prompt([
     {
       type: 'input',
       name: 'stagingBranch',
       message: 'Staging branch name:',
       default: config.git.stagingBranch
+    }
+  ]);
+
+  const sourcePrefixes = await promptSourcePrefixes(config);
+  const sourcePrefixList = Object.values(sourcePrefixes);
+
+  const questions = [
+    {
+      type: 'input',
+      name: 'releasePrefix',
+      message: 'Release branch prefix:',
+      default: config.git.branchPrefix.release || getDefaultConfig().git.branchPrefix.release,
+      filter: normalizePrefix,
+      validate: (value) => {
+        if (!value) return 'The release prefix is required';
+        if (sourcePrefixList.includes(value)) return `${value} is already a source branch prefix`;
+        return true;
+      }
     },
     {
       type: 'list',
       name: 'branchSource',
-      message: 'Where should feature/hotfix branches be looked up?',
+      message: `Where should source branches (${sourcePrefixList.join(', ')}) be looked up?`,
       choices: [
         { name: 'Local branches first, origin as a fallback', value: 'local' },
         { name: 'Origin only', value: 'remote' }
       ],
       default: config.git.branchSource || 'local'
-    },
-    {
-      type: 'input',
-      name: 'featurePrefix',
-      message: 'Feature branch prefix:',
-      default: config.git.branchPrefix.feature
-    },
-    {
-      type: 'input',
-      name: 'hotfixPrefix',
-      message: 'Hotfix branch prefix:',
-      default: config.git.branchPrefix.hotfix
-    },
-    {
-      type: 'input',
-      name: 'releasePrefix',
-      message: 'Release branch prefix:',
-      default: config.git.branchPrefix.release
     },
     {
       type: 'input',
@@ -306,11 +410,10 @@ async function setupWizard() {
 
   const newConfig = {
     git: {
-      stagingBranch: answers.stagingBranch,
+      stagingBranch,
       branchSource: answers.branchSource,
       branchPrefix: {
-        feature: answers.featurePrefix,
-        hotfix: answers.hotfixPrefix,
+        ...sourcePrefixes,
         release: answers.releasePrefix
       }
     },
@@ -470,5 +573,6 @@ async function askUsernames(name, message, current) {
 module.exports = {
   setupWizard,
   ensureAiSettings,
-  promptAiProviderAndModel
+  promptAiProviderAndModel,
+  promptSourcePrefixes
 };

@@ -86,6 +86,34 @@ async function getBranchCatalog(branchPrefix, mode = 'local') {
   return catalog;
 }
 
+// How many branches use each prefix ("feature/" -> 124), counting local and origin branches once
+// per name. Reads the refs already present (no fetch), so it's instant and works offline; used by
+// the setup wizard to suggest the prefixes this repo really uses. {} outside a git repo.
+async function countBranchesByPrefix() {
+  try {
+    const out = await git.raw(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin']);
+    const names = new Set();
+    for (const ref of out.split('\n').map(line => line.trim())) {
+      const name = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length)
+        : ref.startsWith('refs/remotes/origin/') ? ref.slice('refs/remotes/origin/'.length)
+          : null;
+      if (name && name !== 'HEAD') names.add(name);
+    }
+
+    const counts = {};
+    for (const name of names) {
+      const slash = name.indexOf('/');
+      if (slash > 0) {
+        const prefix = name.slice(0, slash + 1);
+        counts[prefix] = (counts[prefix] || 0) + 1;
+      }
+    }
+    return counts;
+  } catch {
+    return {};
+  }
+}
+
 // Number of commits reachable from `to` but not from `from` (0 if either ref is unknown).
 async function countCommitsBetween(from, to) {
   try {
@@ -131,6 +159,7 @@ module.exports = {
   getSourcePrefixes,
   selectBranchesInteractively,
   getBranchCatalog,
+  countBranchesByPrefix,
   countCommitsBetween,
   getLocalBranches,
   getRemoteBranches,
