@@ -29,6 +29,12 @@ const FAKE_MEMBERS = [
   { id: 4, username: 'drobinet', name: 'D. Robinet' }
 ];
 
+const FAKE_LABELS = [
+  { name: 'release', description: 'Ready to ship' },
+  { name: 'hotfix', description: '' },
+  { name: 'needs review', description: 'Waiting for a reviewer' }
+];
+
 function parseArgs(argv) {
   const options = { workDir: path.join(os.tmpdir(), 'release-cherry-pick-sandbox', 'work'), toolDir: TOOL_DIR, answers: {}, fakeGitlab: false, rest: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -65,6 +71,7 @@ function installFakeGitlab() {
 
     if (method === 'GET' && pathname === '/api/v4/user') return json(200, { id: 2, username: 'abel' });
     if (method === 'GET' && /\/members\/all$/.test(pathname)) return json(200, FAKE_MEMBERS);
+    if (method === 'GET' && /\/labels$/.test(pathname)) return json(200, FAKE_LABELS);
     if (method === 'POST' && /\/merge_requests$/.test(pathname)) {
       const body = JSON.parse(init.body);
       console.log(`  [fake-gitlab] POST ${pathname} ${JSON.stringify({ ...body, description: `(${body.description.length} chars)` })}`);

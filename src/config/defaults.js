@@ -32,6 +32,8 @@ const defaultConfig = {
     // GitLab usernames, picked from the real project members in the setup wizard
     defaultReviewers: [],
     defaultAssignees: [],
+    // GitLab label names added to every MR, picked from the project's labels in the setup wizard
+    defaultLabels: [],
     mrSquash: true,
     mrRemoveSourceBranch: true,
     branches: []

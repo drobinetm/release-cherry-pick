@@ -265,9 +265,35 @@ function usernamesToIds(usernames, memberList, role) {
   return ids;
 }
 
+// Labels usable on the project's MRs, including the ones inherited from its parent groups
+async function getProjectLabels(config) {
+  try {
+    const projectId = await getProjectPathId(config);
+    const labels = [];
+
+    for (let page = 1; page <= 50; page++) {
+      const batch = await apiRequest(
+        config,
+        `/projects/${projectId}/labels?include_ancestor_groups=true&per_page=100&page=${page}`
+      );
+      if (!Array.isArray(batch) || batch.length === 0) {
+        break;
+      }
+      labels.push(...batch.map((l) => ({ name: l.name, description: l.description || '' })));
+      if (batch.length < 100) {
+        break;
+      }
+    }
+
+    return labels;
+  } catch (error) {
+    throw new GitLabError(`Failed to list GitLab project labels: ${error.message}`);
+  }
+}
+
 async function createMergeRequest(
   config,
-  { sourceBranch, targetBranch, title, description, reviewers = [], assignees = [], squash = true, removeSourceBranch = true, members = null }
+  { sourceBranch, targetBranch, title, description, reviewers = [], assignees = [], labels = [], squash = true, removeSourceBranch = true, members = null }
 ) {
   try {
     const projectId = await getProjectPathId(config);
@@ -293,6 +319,10 @@ async function createMergeRequest(
     if (assigneeIds.length > 0) {
       body.assignee_ids = assigneeIds;
     }
+    if (labels.length > 0) {
+      // The MR API takes label names as one comma-separated string
+      body.labels = labels.join(',');
+    }
 
     const mr = await apiRequest(config, `/projects/${projectId}/merge_requests`, {
       method: 'POST',
@@ -316,6 +346,7 @@ module.exports = {
   checkAuthStatus,
   ensureAuthenticated,
   getProjectMembers,
+  getProjectLabels,
   createMergeRequest,
   getApiBase,
   getToken,

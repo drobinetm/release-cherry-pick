@@ -63,6 +63,7 @@ function validateConfig(config, source = 'configuration') {
     expect(release.mrRemoveSourceBranch, 'release.mrRemoveSourceBranch', isBoolean, 'true or false');
     expect(release.defaultReviewers, 'release.defaultReviewers', isStringArray, 'a list of GitLab usernames');
     expect(release.defaultAssignees, 'release.defaultAssignees', isStringArray, 'a list of GitLab usernames');
+    expect(release.defaultLabels, 'release.defaultLabels', isStringArray, 'a list of GitLab label names');
     expect(release.branches, 'release.branches', isStringArray, 'a list of branch names');
 
     if (release.defaultReviewerPattern !== undefined) {

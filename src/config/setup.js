@@ -448,6 +448,7 @@ async function setupWizard() {
     newConfig.release.mrRemoveSourceBranch = answers.mrRemoveSourceBranch;
 
     await selectDefaultMembers(newConfig);
+    await selectDefaultLabels(newConfig);
   }
 
   const { reviewAction } = await inquirer.prompt([
@@ -558,6 +559,71 @@ async function pickMembers(name, members, checkedUsernames, configuredUsernames,
     { type: 'checkbox', name, message, pageSize: 15, choices }
   ]);
   return answers[name];
+}
+
+// Sets release.defaultLabels (added to every MR), picked from the project's real labels when they
+// can be listed, or typed otherwise. Like the members, it never prompts for a token mid-wizard.
+async function selectDefaultLabels(config) {
+  const release = config.release;
+  const current = Array.isArray(release.defaultLabels) ? release.defaultLabels : [];
+  const labels = await fetchProjectLabels(config);
+
+  if (!labels) {
+    const { defaultLabels } = await inquirer.prompt([
+      { type: 'input', name: 'defaultLabels', message: 'Default MR labels (comma-separated, blank for none):', default: current.join(', ') }
+    ]);
+    release.defaultLabels = String(defaultLabels).split(',').map(l => l.trim()).filter(Boolean);
+    return;
+  }
+
+  const isCurrent = (name) => current.some(c => c.toLowerCase() === name.toLowerCase());
+  const choices = labels.map(label => ({
+    name: label.description ? `${label.name} — ${truncate(label.description, 60)}` : label.name,
+    value: label.name,
+    checked: isCurrent(label.name)
+  }));
+  // Keep configured labels that no longer exist in the project visible, so they aren't dropped
+  // silently — the user decides whether to keep them.
+  for (const name of current) {
+    if (!labels.some(label => label.name.toLowerCase() === name.toLowerCase())) {
+      choices.push({ name: `${name} (not found among project labels)`, value: name, checked: true });
+    }
+  }
+
+  const { defaultLabels } = await inquirer.prompt([
+    searchableCheckbox({
+      name: 'defaultLabels',
+      message: 'Default MR labels, added to every MR (space to toggle, type to search):',
+      pageSize: 15,
+      default: choices.filter(c => c.checked).map(c => c.value)
+    }, choices)
+  ]);
+  release.defaultLabels = defaultLabels;
+}
+
+async function fetchProjectLabels(config) {
+  if (!gitlab.getToken(config)) {
+    logger.warn('No GitLab token configured (gitlab.token / GITLAB_TOKEN), so project labels can\'t be listed; enter them manually instead.');
+    return null;
+  }
+
+  try {
+    logger.info('Loading GitLab project labels...');
+    const labels = await gitlab.getProjectLabels(config);
+    if (labels.length === 0) {
+      logger.warn('The GitLab project has no labels to choose from; enter them manually instead.');
+      return null;
+    }
+    return labels;
+  } catch (error) {
+    logger.warn(`Could not load GitLab project labels (${error.message}); enter them manually instead.`);
+    return null;
+  }
+}
+
+function truncate(text, max) {
+  const oneLine = String(text).replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 
 async function askUsernames(name, message, current) {

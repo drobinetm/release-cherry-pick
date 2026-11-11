@@ -25,7 +25,7 @@ Given a list of task IDs (from a file, a `-b` flag, or interactive branch select
 3. **Cherry-picks only that task's own commits** onto the release branch — matched by the team's `[TASK-ID] description` commit message convention (not a naive branch diff, which breaks when a branch wasn't cut from a recent `staging`).
 4. **Drafts the MR title and description with Anthropic Claude** from the picked commits, falling back to a static template if AI is disabled or fails.
 5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting your configured default reviewers.
-6. **Creates the MR** with squash-commits and delete-source-branch checked by default, assigned to your configured default assignees.
+6. **Creates the MR** with squash-commits and delete-source-branch checked by default, assigned to your configured default assignees and tagged with your configured default labels.
 7. **Never auto-resolves problems for you**: if cherry-picking conflicts, or the release branch already exists remotely, it stops touching that branch immediately and reports it — you decide manually. Branches whose changes are already present get reported as `SKIPPED`, not silently pushed.
 8. **Produces a final report** (console + `release-summary.md`) showing exactly which branches shipped, which need manual conflict resolution, which were skipped, and the MR link for each.
 
@@ -125,6 +125,7 @@ Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **
     "mrTitleFormat": "[{taskId}] {description}",
     "defaultReviewers": [],
     "defaultAssignees": [],
+    "defaultLabels": [],
     "mrSquash": true,
     "mrRemoveSourceBranch": true,
     "branches": []
@@ -136,7 +137,7 @@ Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **
 
 Any option missing from the file is filled in from these defaults when it's loaded, so config files written by older versions keep working; the merged result is validated up front, and every problem (wrong type, invalid value) is reported in a single clear error.
 
-`config --init` asks for every option above. Source branch prefixes are picked from a list: the configured ones (checked), the prefixes this repo's branches actually use (with how many branches each, shown when 2+ branches share it) and common ones (`feature/`, `hotfix/`, `bugfix/`, `feat/`, `fix/`, `chore/`); **+ Add another prefix…** adds your own. The release prefix is asked separately. When `autoCreateMR` is on, it uses the GitLab token (the one just entered, or `GITLAB_TOKEN`) to list the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. If there's no token yet or the API call fails, it falls back to typing comma-separated usernames. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
+`config --init` asks for every option above. Source branch prefixes are picked from a list: the configured ones (checked), the prefixes this repo's branches actually use (with how many branches each, shown when 2+ branches share it) and common ones (`feature/`, `hotfix/`, `bugfix/`, `feat/`, `fix/`, `chore/`); **+ Add another prefix…** adds your own. The release prefix is asked separately. When `autoCreateMR` is on, it uses the GitLab token (the one just entered, or `GITLAB_TOKEN`) to list the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. It also lists the **project's labels** (including those inherited from parent groups) to pick `defaultLabels`, added to every MR. If there's no token yet or an API call fails, it falls back to typing comma-separated usernames / labels. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
 
 GitLab authentication uses a personal access token stored in `gitlab.token` (or the `GITLAB_TOKEN` environment variable, which takes effect when the config value is empty). The GitLab host and project path are both resolved from the `origin` remote URL (SSH `git@host:group/proj.git`, `ssh://…`, or HTTPS, with or without credentials) — no `projectId` is stored. Set `gitlab.host` only when the remote's host isn't the GitLab web host, e.g. an SSH alias from `~/.ssh/config`. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
 
@@ -166,7 +167,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    `sandbox:run` auto-answers every prompt (list → first choice, checkbox → the checked choices or all if none are, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
 
    Two more flags work with both `sandbox:run` and `sandbox:config` (the setup wizard, whose prompts default to their current values):
-   - `--fake-gitlab` intercepts `fetch()` calls to the GitLab REST API (`/user`, project members, `POST merge_requests` — which prints the request body it received and returns a fake URL) and sets a fake `GITLAB_TOKEN`, so the real client, member-selection and MR-creation code run end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
+   - `--fake-gitlab` intercepts `fetch()` calls to the GitLab REST API (`/user`, project members, project labels, `POST merge_requests` — which prints the request body it received and returns a fake URL) and sets a fake `GITLAB_TOKEN`, so the real client, member-selection and MR-creation code run end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
    - `--answer name=value` forces the answer of a prompt by name (value parsed as JSON when possible).
    ```bash
    npm run sandbox:config -- --fake-gitlab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'

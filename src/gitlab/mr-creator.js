@@ -36,6 +36,7 @@ async function createMR(config, { sourceBranch, targetBranch, taskId, descriptio
       description: mrDescription,
       reviewers,
       assignees: config.release.defaultAssignees || [],
+      labels: config.release.defaultLabels || [],
       squash: config.release.mrSquash !== false,
       removeSourceBranch: config.release.mrRemoveSourceBranch !== false,
       members
