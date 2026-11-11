@@ -6,7 +6,7 @@ const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 const { loadConfig, saveConfig } = require('../config/loader');
 const { setupWizard, ensureAiSettings } = require('../config/setup');
-const { parseBranchListFile, parseCommitSpecs, isCommitHash, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
+const { parseBranchListFile, parseCommitSpecs, parseBranchEntries, isCommitHash, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
 const { selectBranchesInteractively, getBranchCatalog, countCommitsBetween, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { buildReleaseBranchName, createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { captureStartingPoint, restoreStartingPoint, runInterruptible } = require('../git/repo-state');
@@ -30,10 +30,13 @@ async function runRelease(options = {}) {
   }
   // --commits PB-123=abc1234,... : extra commits to cherry-pick per task (malformed values fail here)
   const commitsByTask = parseCommitSpecs(options.commits);
+  // -b "PB-123[abc1234,def5678],PB-124": task IDs / branch names, each with optional extra commits
+  const branchEntries = options.branches && !options.file ? parseBranchEntries(options.branches) : null;
 
   logger.header('Release Cherry-Pick');
-  if (options.listBranches && commitsByTask.size > 0) {
-    logger.warn('--commits is ignored with --list-branches, which doesn\'t cherry-pick anything');
+  const hasExtraCommits = commitsByTask.size > 0 || (branchEntries || []).some(e => e.extraCommits.length > 0);
+  if (options.listBranches && hasExtraCommits) {
+    logger.warn('Extra commits (--commits or [hash] in -b) are ignored with --list-branches, which doesn\'t cherry-pick anything');
   }
 
   // Fail fast (before any prompt) on uncommitted changes / a cherry-pick in progress, and remember
@@ -95,26 +98,27 @@ async function runRelease(options = {}) {
       logger.error(error.message);
       return;
     }
-  } else if (options.branches) {
+  } else if (branchEntries) {
     // Comma-separated list: each entry may be a bare task ID ("PB-123", resolved to its real
-    // branch) or a full branch name ("feature/PB-123-list-user")
-    const entries = options.branches.split(',').map(b => b.trim()).filter(Boolean);
-    const taskIds = entries.filter(isTaskId);
+    // branch) or a full branch name ("feature/PB-123-list-user"), optionally with "[hash,...]"
     const resolved = await resolveTasksToBranches(
-      taskIds.map(taskId => ({ taskId })),
+      branchEntries.filter(e => isTaskId(e.name)).map(e => ({ taskId: e.name, extraCommits: e.extraCommits })),
       config.git.branchPrefix,
       branchNames,
       sourceMode
     );
 
-    for (const entry of entries) {
-      if (isTaskId(entry)) {
-        branches.push(resolved.find(b => b.taskId === entry.toUpperCase()));
+    for (const entry of branchEntries) {
+      if (isTaskId(entry.name)) {
+        branches.push(resolved.find(b => b.taskId === entry.name.toUpperCase()));
       } else {
-        const info = branchInfoFromName(entry, config);
+        const info = branchInfoFromName(entry.name, config);
         if (info) {
           if (!catalog.has(info.branchName)) {
             info.missingReason = await describeMissingBranch(info, branchNames, config.git.branchPrefix, sourceMode);
+          }
+          if (entry.extraCommits.length > 0) {
+            info.extraHashes = [...entry.extraCommits];
           }
           branches.push(info);
         }

@@ -85,6 +85,64 @@ function parseCommitSpecs(specs = []) {
   return byTask;
 }
 
+// Parses the -b/--branches list: comma-separated task IDs or branch names, each optionally followed
+// by extra commit hashes in brackets — "PB-1[abc1234,+def5678],feature/PB-2-x,PB-3". Commas inside
+// brackets separate hashes; outside, entries. Returns [{ name, extraCommits }]; throws one error
+// listing every malformed entry.
+function parseBranchEntries(value) {
+  const pieces = [];
+  const errors = [];
+  let current = '';
+  let inBrackets = false;
+
+  for (const char of String(value || '')) {
+    if (char === '[') {
+      if (inBrackets) errors.push(`nested "[" in "${current}["`);
+      inBrackets = true;
+    } else if (char === ']') {
+      if (!inBrackets) errors.push(`"]" without a matching "[" in "${current}]"`);
+      inBrackets = false;
+    }
+    if (char === ',' && !inBrackets) {
+      pieces.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (inBrackets) errors.push(`unclosed "[" in "${current}"`);
+  pieces.push(current);
+
+  const entries = [];
+  for (const piece of pieces.map(p => p.trim()).filter(Boolean)) {
+    const match = piece.match(/^([^[\]]+?)\s*(?:\[([^[\]]*)\])?$/);
+    if (!match) {
+      if (errors.length === 0) errors.push(`"${piece}" (brackets must come right after the task ID or branch name)`);
+      continue;
+    }
+    const name = match[1].trim();
+    const hasBrackets = match[2] !== undefined;
+    const hashes = hasBrackets
+      ? match[2].split(',').map(hash => hash.trim().replace(/^\+/, '')).filter(Boolean)
+      : [];
+    if (hasBrackets && hashes.length === 0) {
+      errors.push(`"${piece}" (empty commit list)`);
+      continue;
+    }
+    const bad = hashes.filter(hash => !HASH.test(hash));
+    if (bad.length > 0) {
+      errors.push(`"${piece}" (not commit hashes: ${bad.join(', ')})`);
+      continue;
+    }
+    entries.push({ name, extraCommits: hashes });
+  }
+
+  if (errors.length > 0) {
+    throw new AppError(`Invalid -b/--branches value: ${errors.join('; ')}. Expected e.g. "PB-123[abc1234,def5678],PB-124"`);
+  }
+  return entries;
+}
+
 function isCommitHash(value) {
   return HASH.test(String(value).trim());
 }
@@ -129,6 +187,7 @@ module.exports = {
   parseBranchListFile,
   parseBranchLine,
   parseCommitSpecs,
+  parseBranchEntries,
   isCommitHash,
   getBranchNameFromTaskId,
   extractTaskIdFromBranch,

@@ -70,11 +70,16 @@ node src/index.js release --branches feature/PB-123-list-user,hotfix/PB-124-fix-
 # Look up branches on origin only (ignore local branches)
 node src/index.js release --remote --branches PB-123
 
-# Also cherry-pick commits that are missing the "[PB-123]" tag, by hash (repeatable, one per task)
+# Also cherry-pick commits that are missing the "[PB-123]" tag: hashes in brackets after the task
+node src/index.js release --branches "PB-123[3f2a9c1,8d1e004],PB-124[a1b2c3d],PB-125"
+
+# ...or with --commits (repeatable, one per task)
 node src/index.js release --branches PB-123,PB-124 --commits PB-123=3f2a9c1,8d1e004
 ```
 
-**Commits missing the task tag.** Commits are found by their `[TASK-ID] description` title. One that mentions the ID loosely (`PB-123: fix`) is detected and offered; one with no ID at all (`fix typo`) can only be added by hash: with `--commits PB-123=<hash>[,<hash>...]`, with `[+<hash>, ...]` at the end of the task's line in the branch list file, or by typing it when a task has no tagged commits (the tool offers it). Each hash is checked before the release branch is created: unknown/ambiguous hashes and merge commits make the task `NO PROCEDE`, commits already on staging are skipped, and a commit that isn't on the task's branch needs your confirmation. Added commits are cherry-picked in branch-history order with the tagged ones and listed under the task in the summary. `--commits` is ignored with `--list-branches`, which doesn't cherry-pick.
+In PowerShell, **quote comma-separated lists** (`-b "PB-123,PB-124"`): unquoted, PowerShell turns `PB-123,PB-124` into an array and the npm `.ps1` shim passes it on as `PB-123 PB-124`.
+
+**Commits missing the task tag.** Commits are found by their `[TASK-ID] description` title. One that mentions the ID loosely (`PB-123: fix`) is detected and offered; one with no ID at all (`fix typo`) can only be added by hash: in brackets after the task in `-b` (`PB-123[<hash>,<hash>]`, a leading `+` on each hash is optional), with `--commits PB-123=<hash>[,<hash>...]`, with `[+<hash>, ...]` at the end of the task's line in the branch list file, or by typing it when a task has no tagged commits (the tool offers it). Each hash is checked before the release branch is created: unknown/ambiguous hashes and merge commits make the task `NO PROCEDE`, commits already on staging are skipped, and a commit that isn't on the task's branch needs your confirmation. Added commits are cherry-picked in branch-history order with the tagged ones and listed under the task in the summary. Hashes given for the same task in several ways are merged. They're ignored with `--list-branches`, which doesn't cherry-pick.
 
 A bare task ID is resolved to its real branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
 

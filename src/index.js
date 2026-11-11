@@ -15,7 +15,7 @@ program
   .command('release')
   .description('Start the release process')
   .option('-f, --file <path>', 'Path to branch list file')
-  .option('-b, --branches <branches>', 'Comma-separated list of branches')
+  .option('-b, --branches <branches>', 'Comma-separated task IDs or branch names, each optionally followed by extra commit hashes in brackets, e.g. "PB-123[abc1234,def5678],PB-124"')
   .option('--local', 'Look up source branches locally first, falling back to origin (default unless git.branchSource is "remote")')
   .option('--remote', 'Look up source branches on origin only')
   .option(
