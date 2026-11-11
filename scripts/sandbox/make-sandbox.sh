@@ -69,6 +69,12 @@ git checkout -qb feature/PB-610-stale-local staging
 echo "first" > pb610.txt && commit "[PB-610] first part"
 echo "second" > pb610b.txt && commit "[PB-610] second part"
 git push -q -u origin feature/PB-610-stale-local && git reset -q --hard HEAD~1
+
+# PB-700: the fix was committed without the "[PB-700]" tag (nothing is found by message); it can
+# only be released by giving its hash (--commits, "[+hash]" in the task file, or the prompt)
+git checkout -qb feature/PB-700-untagged staging
+echo "redirect fixed" > pb700.txt && commit "fix login redirect"
+git push -q -u origin feature/PB-700-untagged
 git checkout -q staging
 
 # The tool keeps its config outside the project (see src/config/loader.js); the sandbox's copy goes
