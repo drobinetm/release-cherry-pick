@@ -37,6 +37,11 @@ function validateConfig(config, source = 'configuration') {
         expect(prefix, `git.branchPrefix.${type}`, isString, 'a string');
       }
       expect(git.branchPrefix.release, 'git.branchPrefix.release', isNonEmptyString, 'a non-empty string');
+      const hasSourcePrefix = Object.entries(git.branchPrefix)
+        .some(([type, prefix]) => type !== 'release' && isNonEmptyString(prefix));
+      if (!hasSourcePrefix) {
+        errors.push('git.branchPrefix must define at least one source prefix besides release (e.g. "feature": "feature/")');
+      }
     } else {
       errors.push('git.branchPrefix must be an object');
     }
