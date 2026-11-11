@@ -69,7 +69,12 @@ node src/index.js release --branches feature/PB-123-list-user,hotfix/PB-124-fix-
 
 # Look up branches on origin only (ignore local branches)
 node src/index.js release --remote --branches PB-123
+
+# Also cherry-pick commits that are missing the "[PB-123]" tag, by hash (repeatable, one per task)
+node src/index.js release --branches PB-123,PB-124 --commits PB-123=3f2a9c1,8d1e004
 ```
+
+**Commits missing the task tag.** Commits are found by their `[TASK-ID] description` title. One that mentions the ID loosely (`PB-123: fix`) is detected and offered; one with no ID at all (`fix typo`) can only be added by hash: with `--commits PB-123=<hash>[,<hash>...]`, with `[+<hash>, ...]` at the end of the task's line in the branch list file, or by typing it when a task has no tagged commits (the tool offers it). Each hash is checked before the release branch is created: unknown/ambiguous hashes and merge commits make the task `NO PROCEDE`, commits already on staging are skipped, and a commit that isn't on the task's branch needs your confirmation. Added commits are cherry-picked in branch-history order with the tagged ones and listed under the task in the summary. `--commits` is ignored with `--list-branches`, which doesn't cherry-pick.
 
 A bare task ID is resolved to its real branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
 
@@ -90,9 +95,10 @@ node src/index.js config --show
 ```
 *PB-I3217*: Al gestionar autos de una póliza y al renovar una póliza de auto, el campo Endoso no está listando los posibles valores a seleccionar.
 *PB-I3218*: Error al listar "Coberturas afectadas" (Configuraciones / Reclamos / Coberturas afectadas).
+*PB-I3220*: Corregir redirección del login [+3f2a9c1, +8d1e004]
 ```
 
-The tool resolves each task ID to its real branch automatically — local first, then `origin` (see above) — asking you to disambiguate if more than one branch matches.
+The tool resolves each task ID to its real branch automatically — local first, then `origin` (see above) — asking you to disambiguate if more than one branch matches. An optional `[+hash, ...]` at the end of a line adds those commits to the task's cherry-pick (see "Commits missing the task tag" above); it isn't part of the description used for the MR title.
 
 ### Configuration file
 
@@ -157,7 +163,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    ```bash
    find src -name "*.js" -exec node --check {} \;
    ```
-3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID, a local-only branch `PB-600`, and a local branch `PB-610` that is behind origin). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
+3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID, a local-only branch `PB-600`, a local branch `PB-610` that is behind origin, and `PB-700`, whose only commit has no task tag — release it with `--commits PB-700=<hash>`). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
    ```bash
    npm run sandbox:create                                  # (re)creates it in $TMPDIR/release-cherry-pick-sandbox
    npm run sandbox:run -- -b "PB-100,hotfix/PB-I200-favicon,PB-300,PB-400,PB-500,feature/refactor"

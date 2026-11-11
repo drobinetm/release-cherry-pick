@@ -18,6 +18,12 @@ program
   .option('-b, --branches <branches>', 'Comma-separated list of branches')
   .option('--local', 'Look up source branches locally first, falling back to origin (default unless git.branchSource is "remote")')
   .option('--remote', 'Look up source branches on origin only')
+  .option(
+    '--commits <task=hashes>',
+    'Extra commits to cherry-pick for a task, e.g. PB-123=abc1234,def5678 (repeatable) — for commits missing the "[TASK-ID]" tag',
+    (value, previous) => previous.concat([value]),
+    []
+  )
   .option('-l, --list-branches', 'Skip cherry-pick: create empty release branches from staging, open each MR from the source branch instead, and list the release branches created at the end')
   .action(async (options) => {
     try {

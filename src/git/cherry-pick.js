@@ -176,6 +176,7 @@ async function findLooseTaskCommits(sourceBranch, taskId, baseBranch = null, { s
 
 // Returns `commits` in the order they appear on sourceBranch (oldest first), as cherry-picking a
 // mix of tagged and loose commits must follow the branch's history, not the order they were found.
+// Commits that aren't on the branch (given by hash from elsewhere) go last, in the order given.
 async function orderCommitsByHistory(sourceBranch, commits, baseBranch = null, { sourceRef = `origin/${sourceBranch}` } = {}) {
   const args = ['rev-list', '--reverse', sourceRef];
   if (baseBranch) {
@@ -183,7 +184,62 @@ async function orderCommitsByHistory(sourceBranch, commits, baseBranch = null, {
   }
   const order = (await git.raw(args)).trim().split('\n');
   const position = new Map(order.map((hash, index) => [hash, index]));
-  return [...commits].sort((a, b) => position.get(a.hash) - position.get(b.hash));
+  const rank = commit => (position.has(commit.hash) ? position.get(commit.hash) : order.length);
+  return [...commits].sort((a, b) => rank(a) - rank(b));
+}
+
+// True if `commit` is reachable from `ref`. `git merge-base --is-ancestor` only answers through its
+// exit code, which simple-git's raw() doesn't surface (it rejects only when git writes to stderr),
+// so this checks that the `ref..commit` range is empty instead.
+async function isAncestor(commit, ref) {
+  const out = await git.raw(['rev-list', '--max-count=1', `${ref}..${commit}`]);
+  return out.trim() === '';
+}
+
+// Resolves commit hashes the user asked to include (task file "[+hash]", --commits, or the prompt)
+// into { hash, message } commits. Returns:
+//   commits        cherry-pickable ones (full hash + subject), in the order given
+//   alreadyOnBase  reachable from origin/<baseBranch> already — nothing to pick
+//   offBranch      subset of `commits` not reachable from sourceRef (the caller asks to confirm)
+//   errors         unknown/ambiguous hashes and merge commits
+async function resolveExtraCommits(hashes, { sourceRef, baseBranch = null } = {}) {
+  const result = { commits: [], alreadyOnBase: [], offBranch: [], errors: [] };
+  const seen = new Set();
+
+  for (const input of hashes) {
+    let full;
+    try {
+      // --quiet: an unknown hash prints nothing and exits non-zero, so `full` stays empty
+      full = (await git.raw(['rev-parse', '--verify', '--quiet', `${input}^{commit}`])).trim();
+    } catch {
+      full = '';
+    }
+    if (!full) {
+      result.errors.push(`${input} is not a commit in this repository, or is ambiguous (fetch, or use a longer hash)`);
+      continue;
+    }
+    if (seen.has(full)) continue;
+    seen.add(full);
+
+    const parents = (await git.raw(['rev-list', '--parents', '--max-count=1', full])).trim().split(/\s+/).length - 1;
+    if (parents > 1) {
+      result.errors.push(`${input} is a merge commit, which can't be cherry-picked directly`);
+      continue;
+    }
+
+    const message = (await git.raw(['log', '-1', '--format=%s', full])).trim();
+    const commit = { hash: full, message };
+    if (baseBranch && await isAncestor(full, `origin/${baseBranch}`)) {
+      result.alreadyOnBase.push(commit);
+      continue;
+    }
+    if (sourceRef && !(await isAncestor(full, sourceRef))) {
+      result.offBranch.push(commit);
+    }
+    result.commits.push(commit);
+  }
+
+  return result;
 }
 
 async function getConflictingFiles() {
@@ -211,6 +267,7 @@ module.exports = {
   getCommitsToCherryPick,
   findLooseTaskCommits,
   orderCommitsByHistory,
+  resolveExtraCommits,
   getConflictingFiles,
   abortCherryPick
 };
