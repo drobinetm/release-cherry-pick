@@ -3,6 +3,10 @@
   "version": "1.0.3",
   "description": "CLI tool for automating release cherry-pick and GitLab MR creation",
   "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drobinetm/release-cherry-pick.git"
+  },
   "files": [
     "src"
   ],
