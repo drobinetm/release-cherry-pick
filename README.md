@@ -181,11 +181,13 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    This gives you real branches, real commit history, and real conflict scenarios with zero risk to the actual GitLab project.
 5. **GitLab API behavior** (token validation, listing reviewers, MR creation) and **AI generation** need a real token (PAT with `api` scope) and a real Anthropic key respectively to exercise end-to-end — verify these manually against a test GitLab project before relying on them in production.
 
-## Developers
+## Contributors
 
-- lleraabi@gmail.com
-- ariel@ingeniuscuba.com
-- drobinetm@outlook.com
+<a href="https://github.com/drobinetm/release-cherry-pick/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=drobinetm/release-cherry-pick" alt="Contributors" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
 
 ## License
 
