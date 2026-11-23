@@ -47,6 +47,8 @@ No `NPM_TOKEN` is needed; the workflow authenticates with OIDC.
    - lint fails,
    - the Trusted Publisher is not configured (401/403 on `npm publish`).
 
+   After a successful publish, the workflow also creates the GitHub Release for the tag, with auto-generated notes (it runs last, so a failed publish never leaves a release behind).
+
 6. Verify the published package:
 
    ```bash
@@ -54,7 +56,7 @@ No `NPM_TOKEN` is needed; the workflow authenticates with OIDC.
    npm run test:package -- --version <new-version>
    ```
 
-   The npm page should show the "Provenance" badge.
+   The npm page should show the "Provenance" badge, and the repo's Releases page should list `v<version>`.
 
 ## If something goes wrong
 
@@ -66,6 +68,7 @@ No `NPM_TOKEN` is needed; the workflow authenticates with OIDC.
   ```
 
   Fix the problem, then run the checklist again.
+- **Published, but the GitHub Release step failed:** the package is live, so do not retag. Create the release by hand: `gh release create v<version> --verify-tag --generate-notes`.
 - **A bad version was published:** npm versions are immutable and cannot be republished. Release a fixed patch version. If the bad one is harmful, deprecate it: `npm deprecate release-cherry-pick@<version> "<reason>"`.
 - **The README on npm looks stale:** the README is frozen per version, so a docs change needs a new release.
 
