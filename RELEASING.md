@@ -6,7 +6,8 @@ How to publish a new version of `release-cherry-pick` to npm. Publishing is auto
 
 1. On npmjs.com, open the `release-cherry-pick` package → Settings → Trusted Publisher → GitHub Actions.
 2. Fill in owner `drobinetm`, repository `release-cherry-pick`, workflow `publish.yml`.
-3. Recommended: in GitHub, add a tag protection rule (or a ruleset) for `v*` so only maintainers can create release tags.
+3. **Allowed actions:** tick **Allow `npm publish`**. With both boxes empty the publisher can only stage versions, and the workflow's `npm publish` fails with `E403 ... OIDC permission denied for this action`. `dist-tag` is not needed. The config shows "Pending validation" until the first successful publish.
+4. Recommended: in GitHub, add a tag protection rule (or a ruleset) for `v*` so only maintainers can create release tags.
 
 No `NPM_TOKEN` is needed; the workflow authenticates with OIDC.
 
@@ -45,7 +46,7 @@ No `NPM_TOKEN` is needed; the workflow authenticates with OIDC.
 5. Watch the run in GitHub → Actions → "Publish to npm". It fails, without publishing, if:
    - the tag does not match the `package.json` version,
    - lint fails,
-   - the Trusted Publisher is not configured (401/403 on `npm publish`).
+   - the Trusted Publisher is not configured, or "Allow `npm publish`" is not ticked (401/403 on `npm publish`).
 
    After a successful publish, the workflow also creates the GitHub Release for the tag, with auto-generated notes (it runs last, so a failed publish never leaves a release behind).
 
