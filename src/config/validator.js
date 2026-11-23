@@ -31,11 +31,17 @@ function validateConfig(config, source = 'configuration') {
     const { git, gitlab, ai, release } = config;
 
     expect(git.stagingBranch, 'git.stagingBranch', isNonEmptyString, 'a non-empty string');
+    expect(git.branchSource, 'git.branchSource', v => v === 'local' || v === 'remote', '"local" or "remote"');
     if (isPlainObject(git.branchPrefix)) {
       for (const [type, prefix] of Object.entries(git.branchPrefix)) {
         expect(prefix, `git.branchPrefix.${type}`, isString, 'a string');
       }
       expect(git.branchPrefix.release, 'git.branchPrefix.release', isNonEmptyString, 'a non-empty string');
+      const hasSourcePrefix = Object.entries(git.branchPrefix)
+        .some(([type, prefix]) => type !== 'release' && isNonEmptyString(prefix));
+      if (!hasSourcePrefix) {
+        errors.push('git.branchPrefix must define at least one source prefix besides release (e.g. "feature": "feature/")');
+      }
     } else {
       errors.push('git.branchPrefix must be an object');
     }
@@ -57,6 +63,7 @@ function validateConfig(config, source = 'configuration') {
     expect(release.mrRemoveSourceBranch, 'release.mrRemoveSourceBranch', isBoolean, 'true or false');
     expect(release.defaultReviewers, 'release.defaultReviewers', isStringArray, 'a list of GitLab usernames');
     expect(release.defaultAssignees, 'release.defaultAssignees', isStringArray, 'a list of GitLab usernames');
+    expect(release.defaultLabels, 'release.defaultLabels', isStringArray, 'a list of GitLab label names');
     expect(release.branches, 'release.branches', isStringArray, 'a list of branch names');
 
     if (release.defaultReviewerPattern !== undefined) {

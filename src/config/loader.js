@@ -93,7 +93,15 @@ function loadConfig({ validate = true } = {}) {
     throw new ConfigError(`Config file ${configPath} must contain a JSON object`);
   }
 
-  const config = mergeWithDefaults(getDefaultConfig(), fileConfig);
+  const defaults = getDefaultConfig();
+  const config = mergeWithDefaults(defaults, fileConfig);
+  // git.branchPrefix is a set picked as a whole (the wizard may drop default prefixes like hotfix/),
+  // so a saved one replaces the defaults instead of being merged with them; only the release prefix
+  // is filled in when missing.
+  const savedPrefixes = isPlainObject(fileConfig.git) ? fileConfig.git.branchPrefix : undefined;
+  if (isPlainObject(savedPrefixes)) {
+    config.git.branchPrefix = { ...savedPrefixes, release: savedPrefixes.release || defaults.git.branchPrefix.release };
+  }
   if (validate) {
     validateConfig(config, configPath);
   }

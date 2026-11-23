@@ -25,7 +25,7 @@ Given a list of task IDs (from a file, a `-b` flag, or interactive branch select
 3. **Cherry-picks only that task's own commits** onto the release branch — matched by the team's `[TASK-ID] description` commit message convention (not a naive branch diff, which breaks when a branch wasn't cut from a recent `staging`).
 4. **Drafts the MR title and description with Anthropic Claude** from the picked commits, falling back to a static template if AI is disabled or fails.
 5. **Lists real GitLab project members** for the reviewer prompt, pre-selecting your configured default reviewers.
-6. **Creates the MR** with squash-commits and delete-source-branch checked by default, assigned to your configured default assignees.
+6. **Creates the MR** with squash-commits and delete-source-branch checked by default, assigned to your configured default assignees and tagged with your configured default labels.
 7. **Never auto-resolves problems for you**: if cherry-picking conflicts, or the release branch already exists remotely, it stops touching that branch immediately and reports it — you decide manually. Branches whose changes are already present get reported as `SKIPPED`, not silently pushed.
 8. **Produces a final report** (console + `release-summary.md`) showing exactly which branches shipped, which need manual conflict resolution, which were skipped, and the MR link for each.
 
@@ -66,9 +66,24 @@ node src/index.js release --file branches.txt
 # Direct — comma-separated task IDs and/or full branch names
 node src/index.js release --branches PB-123,PB-124
 node src/index.js release --branches feature/PB-123-list-user,hotfix/PB-124-fix-favicon
+
+# Look up branches on origin only (ignore local branches)
+node src/index.js release --remote --branches PB-123
+
+# Also cherry-pick commits that are missing the "[PB-123]" tag: hashes in brackets after the task
+node src/index.js release --branches "PB-123[3f2a9c1,8d1e004],PB-124[a1b2c3d],PB-125"
+
+# ...or with --commits (repeatable, one per task)
+node src/index.js release --branches PB-123,PB-124 --commits PB-123=3f2a9c1,8d1e004
 ```
 
-A bare task ID is resolved to its real remote branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
+In PowerShell, **quote comma-separated lists** (`-b "PB-123,PB-124"`): unquoted, PowerShell turns `PB-123,PB-124` into an array and the npm `.ps1` shim passes it on as `PB-123 PB-124`.
+
+**Commits missing the task tag.** Commits are found by their `[TASK-ID] description` title. One that mentions the ID loosely (`PB-123: fix`) is detected and offered; one with no ID at all (`fix typo`) can only be added by hash: in brackets after the task in `-b` (`PB-123[<hash>,<hash>]`, a leading `+` on each hash is optional), with `--commits PB-123=<hash>[,<hash>...]`, with `[+<hash>, ...]` at the end of the task's line in the branch list file, or by typing it when a task has no tagged commits (the tool offers it). Each hash is checked before the release branch is created: unknown/ambiguous hashes and merge commits make the task `NO PROCEDE`, commits already on staging are skipped, and a commit that isn't on the task's branch needs your confirmation. Added commits are cherry-picked in branch-history order with the tagged ones and listed under the task in the summary. Hashes given for the same task in several ways are merged. They're ignored with `--list-branches`, which doesn't cherry-pick.
+
+A bare task ID is resolved to its real branch (same as the file input); for a full branch name, the task ID is extracted from it. Branches whose name doesn't start with a task ID are skipped with a warning.
+
+**Where branches are looked up.** By default (`git.branchSource: "local"`) the tool looks at your **local** feature/hotfix branches first and falls back to `origin` for branches you don't have locally, so a branch you haven't pushed can be released too. Commits are cherry-picked from whichever copy was chosen; the release branch is still created from `origin/staging` and pushed, and the MR is opened from it, so the source branch never needs to be on origin. If your local copy is **behind** `origin` (someone pushed commits you haven't pulled), the tool says so and asks which version to release — `origin`'s by default — instead of silently leaving those commits out. Use `--remote` (or `git.branchSource: "remote"`) to look at `origin` only, and `--local` to force local-first when the config says `remote`. `--list-branches` opens each MR straight from the source branch, so it always looks branches up on `origin` and can't be combined with `--local`.
 
 ### Configure
 
@@ -85,9 +100,10 @@ node src/index.js config --show
 ```
 *PB-I3217*: Al gestionar autos de una póliza y al renovar una póliza de auto, el campo Endoso no está listando los posibles valores a seleccionar.
 *PB-I3218*: Error al listar "Coberturas afectadas" (Configuraciones / Reclamos / Coberturas afectadas).
+*PB-I3220*: Corregir redirección del login [+3f2a9c1, +8d1e004]
 ```
 
-The tool resolves each task ID to its real remote branch automatically (asking you to disambiguate if more than one branch matches).
+The tool resolves each task ID to its real branch automatically — local first, then `origin` (see above) — asking you to disambiguate if more than one branch matches. An optional `[+hash, ...]` at the end of a line adds those commits to the task's cherry-pick (see "Commits missing the task tag" above); it isn't part of the description used for the MR title.
 
 ### Configuration file
 
@@ -97,6 +113,7 @@ Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **
 {
   "git": {
     "stagingBranch": "staging",
+    "branchSource": "local",
     "branchPrefix": {
       "feature": "feature/",
       "hotfix": "hotfix/",
@@ -119,6 +136,7 @@ Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **
     "mrTitleFormat": "[{taskId}] {description}",
     "defaultReviewers": [],
     "defaultAssignees": [],
+    "defaultLabels": [],
     "mrSquash": true,
     "mrRemoveSourceBranch": true,
     "branches": []
@@ -130,7 +148,7 @@ Since it can hold secrets (`gitlab.token`, `ai.apiKey`), the configuration is **
 
 Any option missing from the file is filled in from these defaults when it's loaded, so config files written by older versions keep working; the merged result is validated up front, and every problem (wrong type, invalid value) is reported in a single clear error.
 
-`config --init` asks for every option above. When `autoCreateMR` is on, it uses the GitLab token (the one just entered, or `GITLAB_TOKEN`) to list the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. If there's no token yet or the API call fails, it falls back to typing comma-separated usernames. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
+`config --init` asks for every option above. Source branch prefixes are picked from a list: the configured ones (checked), the prefixes this repo's branches actually use (with how many branches each, shown when 2+ branches share it) and common ones (`feature/`, `hotfix/`, `bugfix/`, `feat/`, `fix/`, `chore/`); **+ Add another prefix…** adds your own. The release prefix is asked separately. When `autoCreateMR` is on, it uses the GitLab token (the one just entered, or `GITLAB_TOKEN`) to list the **real GitLab project members** so you pick `defaultReviewers` (preselected in each MR's reviewer prompt, still editable per MR) and `defaultAssignees` (assigned automatically to every MR) from them. It also lists the **project's labels** (including those inherited from parent groups) to pick `defaultLabels`, added to every MR. If there's no token yet or an API call fails, it falls back to typing comma-separated usernames / labels. Older configs with `release.defaultReviewerPattern` (a regex over usernames) still work — it's used when `defaultReviewers` is empty — and running the wizard migrates it into the explicit list.
 
 GitLab authentication uses a personal access token stored in `gitlab.token` (or the `GITLAB_TOKEN` environment variable, which takes effect when the config value is empty). The GitLab host and project path are both resolved from the `origin` remote URL (SSH `git@host:group/proj.git`, `ssh://…`, or HTTPS, with or without credentials) — no `projectId` is stored. Set `gitlab.host` only when the remote's host isn't the GitLab web host, e.g. an SSH alias from `~/.ssh/config`. The Anthropic API key can also be supplied via the `ANTHROPIC_API_KEY` environment variable instead of the config file.
 
@@ -150,7 +168,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    ```bash
    find src -name "*.js" -exec node --check {} \;
    ```
-3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
+3. **Run the full release flow against the synthetic sandbox** — a throwaway local `origin` (bare repo) plus a clone with prepared branches covering each scenario (normal feature/hotfix, untagged commit that must not be picked, real conflict, already-applied change → `SKIPPED`, two branches with the same task ID, branch with no task ID, a local-only branch `PB-600`, a local branch `PB-610` that is behind origin, and `PB-700`, whose only commit has no task tag — release it with `--commits PB-700=<hash>`). Its config has `autoCreateMR: false`, so nothing is pushed and the GitLab API is never called:
    ```bash
    npm run sandbox:create                                  # (re)creates it in $TMPDIR/release-cherry-pick-sandbox
    npm run sandbox:run -- -b "PB-100,hotfix/PB-I200-favicon,PB-300,PB-400,PB-500,feature/refactor"
@@ -160,7 +178,7 @@ There's no automated test suite yet (`npm test` is a placeholder). To validate a
    `sandbox:run` auto-answers every prompt (list → first choice, checkbox → the checked choices or all if none are, confirm → no), so it runs unattended. Re-run `sandbox:create` before each run to start from a clean state.
 
    Two more flags work with both `sandbox:run` and `sandbox:config` (the setup wizard, whose prompts default to their current values):
-   - `--fake-gitlab` intercepts `fetch()` calls to the GitLab REST API (`/user`, project members, `POST merge_requests` — which prints the request body it received and returns a fake URL) and sets a fake `GITLAB_TOKEN`, so the real client, member-selection and MR-creation code run end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
+   - `--fake-gitlab` intercepts `fetch()` calls to the GitLab REST API (`/user`, project members, project labels, `POST merge_requests` — which prints the request body it received and returns a fake URL) and sets a fake `GITLAB_TOKEN`, so the real client, member-selection and MR-creation code run end to end with no GitLab. Release branches are pushed to the sandbox's local `origin` only.
    - `--answer name=value` forces the answer of a prompt by name (value parsed as JSON when possible).
    ```bash
    npm run sandbox:config -- --fake-gitlab --answer autoCreateMR=true --answer 'defaultAssignees=["abel"]'

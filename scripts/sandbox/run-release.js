@@ -4,6 +4,9 @@
 // (confirms default to "no", so no report/docs files are written). See harness.js for common flags.
 // Usage:
 //   node scripts/sandbox/run-release.js -b "PB-100,hotfix/PB-I200-favicon" [--work <dir>] [--fake-gitlab]
+//   node scripts/sandbox/run-release.js -b PB-600,PB-610   (local-only branch / stale local branch)
+//   node scripts/sandbox/run-release.js --remote -b PB-100 (origin only)
+//   node scripts/sandbox/run-release.js -b PB-700 --commits PB-700=<hash>   (untagged commit by hash)
 //   node scripts/sandbox/run-release.js -f tasks.txt
 //   node scripts/sandbox/run-release.js                 (interactive branch selection path)
 
@@ -14,7 +17,10 @@ const harness = setup(process.argv.slice(2), { confirmDefault: false });
 const options = {};
 for (let i = 0; i < harness.rest.length; i++) {
   const arg = harness.rest[i];
-  if (arg === '-b' || arg === '--branches') options.branches = harness.rest[++i];
+  if (arg === '--local') options.local = true;
+  else if (arg === '--remote') options.remote = true;
+  else if (arg === '--commits') options.commits = [...(options.commits || []), harness.rest[++i]];
+  else if (arg === '-b' || arg === '--branches') options.branches = harness.rest[++i];
   else if (arg === '-f' || arg === '--file') options.file = harness.rest[++i];
 }
 

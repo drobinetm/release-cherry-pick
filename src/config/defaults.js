@@ -3,6 +3,9 @@
 const defaultConfig = {
   git: {
     stagingBranch: 'staging',
+    // Where source branches are looked up: 'local' (local branches first, origin as a fallback for
+    // branches that don't exist locally) or 'remote' (origin only). --local/--remote override it.
+    branchSource: 'local',
     branchPrefix: {
       feature: 'feature/',
       hotfix: 'hotfix/',
@@ -29,6 +32,8 @@ const defaultConfig = {
     // GitLab usernames, picked from the real project members in the setup wizard
     defaultReviewers: [],
     defaultAssignees: [],
+    // GitLab label names added to every MR, picked from the project's labels in the setup wizard
+    defaultLabels: [],
     mrSquash: true,
     mrRemoveSourceBranch: true,
     branches: []

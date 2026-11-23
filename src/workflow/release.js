@@ -6,11 +6,11 @@ const inquirer = require('inquirer');
 const logger = require('../utils/logger');
 const { loadConfig, saveConfig } = require('../config/loader');
 const { setupWizard, ensureAiSettings } = require('../config/setup');
-const { parseBranchListFile, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
-const { selectBranchesInteractively, getRemoteBranches, resolveBranchNameForTaskId } = require('../git/branch-selector');
+const { parseBranchListFile, parseCommitSpecs, parseBranchEntries, isCommitHash, extractTaskIdFromBranch, describeBranch, isTaskId } = require('../git/branch-parser');
+const { selectBranchesInteractively, getBranchCatalog, countCommitsBetween, resolveBranchNameForTaskId } = require('../git/branch-selector');
 const { buildReleaseBranchName, createReleaseBranch, pushBranch } = require('../git/release-branch');
 const { captureStartingPoint, restoreStartingPoint, runInterruptible } = require('../git/repo-state');
-const { cherryPickCommits, getCommitsToCherryPick, findLooseTaskCommits, orderCommitsByHistory } = require('../git/cherry-pick');
+const { cherryPickCommits, getCommitsToCherryPick, findLooseTaskCommits, orderCommitsByHistory, resolveExtraCommits } = require('../git/cherry-pick');
 const gitlab = require('../gitlab/client');
 const { configureGitCredentials } = require('../git/git-auth');
 const { selectReviewer } = require('../gitlab/reviewer-selector');
@@ -19,9 +19,25 @@ const ReleaseStatus = require('../git/release-status');
 const { generateMarkdownSummary } = require('../report/summary');
 const { generateAgentsMd } = require('../doc/agents-generator');
 const { generateRpdMd } = require('../doc/rpd-generator');
+const { ConfigError, GitError } = require('../utils/errors');
 
 async function runRelease(options = {}) {
+  if (options.local && options.remote) {
+    throw new ConfigError('--local and --remote cannot be used together');
+  }
+  if (options.local && options.listBranches) {
+    throw new ConfigError('--local cannot be combined with --list-branches: that mode opens the MR straight from the source branch, which must exist on origin');
+  }
+  // --commits PB-123=abc1234,... : extra commits to cherry-pick per task (malformed values fail here)
+  const commitsByTask = parseCommitSpecs(options.commits);
+  // -b "PB-123[abc1234,def5678],PB-124": task IDs / branch names, each with optional extra commits
+  const branchEntries = options.branches && !options.file ? parseBranchEntries(options.branches) : null;
+
   logger.header('Release Cherry-Pick');
+  const hasExtraCommits = commitsByTask.size > 0 || (branchEntries || []).some(e => e.extraCommits.length > 0);
+  if (options.listBranches && hasExtraCommits) {
+    logger.warn('Extra commits (--commits or [hash] in -b) are ignored with --list-branches, which doesn\'t cherry-pick anything');
+  }
 
   // Fail fast (before any prompt) on uncommitted changes / a cherry-pick in progress, and remember
   // where HEAD is so it can be restored once all branches are processed
@@ -65,41 +81,44 @@ async function runRelease(options = {}) {
   // on every git operation for the rest of this run.
   await configureGitCredentials(config);
 
-  // Get branches to process
+  // Get branches to process. Every source branch is listed once up front: local ones (by default)
+  // plus origin's, the fallback for branches that don't exist locally.
   let branches = [];
+  const sourceMode = resolveSourceMode(options, config);
+  const catalog = await getBranchCatalog(config.git.branchPrefix, sourceMode);
+  const branchNames = [...catalog.keys()].sort();
 
   if (options.file) {
     // Parse branches from file
     try {
       const branchList = parseBranchListFile(options.file);
       logger.info(`Loaded ${branchList.length} task(s) from file, resolving real branch names...`);
-      branches = await resolveTasksToBranches(branchList, config.git.branchPrefix);
+      branches = await resolveTasksToBranches(branchList, config.git.branchPrefix, branchNames, sourceMode);
     } catch (error) {
       logger.error(error.message);
       return;
     }
-  } else if (options.branches) {
+  } else if (branchEntries) {
     // Comma-separated list: each entry may be a bare task ID ("PB-123", resolved to its real
-    // remote branch) or a full branch name ("feature/PB-123-list-user")
-    const entries = options.branches.split(',').map(b => b.trim()).filter(Boolean);
-    const taskIds = entries.filter(isTaskId);
+    // branch) or a full branch name ("feature/PB-123-list-user"), optionally with "[hash,...]"
     const resolved = await resolveTasksToBranches(
-      taskIds.map(taskId => ({ taskId })),
-      config.git.branchPrefix
+      branchEntries.filter(e => isTaskId(e.name)).map(e => ({ taskId: e.name, extraCommits: e.extraCommits })),
+      config.git.branchPrefix,
+      branchNames,
+      sourceMode
     );
 
-    // Only fetched when a full branch name was given, to confirm it really exists on origin
-    let remoteBranches = null;
-
-    for (const entry of entries) {
-      if (isTaskId(entry)) {
-        branches.push(resolved.find(b => b.taskId === entry.toUpperCase()));
+    for (const entry of branchEntries) {
+      if (isTaskId(entry.name)) {
+        branches.push(resolved.find(b => b.taskId === entry.name.toUpperCase()));
       } else {
-        const info = branchInfoFromName(entry, config);
+        const info = branchInfoFromName(entry.name, config);
         if (info) {
-          remoteBranches = remoteBranches || (await getRemoteBranches(config.git.branchPrefix));
-          if (!remoteBranches.includes(info.branchName)) {
-            info.missingReason = await describeMissingBranch(info, remoteBranches, config.git.branchPrefix);
+          if (!catalog.has(info.branchName)) {
+            info.missingReason = await describeMissingBranch(info, branchNames, config.git.branchPrefix, sourceMode);
+          }
+          if (entry.extraCommits.length > 0) {
+            info.extraHashes = [...entry.extraCommits];
           }
           branches.push(info);
         }
@@ -124,17 +143,16 @@ async function runRelease(options = {}) {
       ]);
 
       if (useSaved) {
-        const remoteBranches = await getRemoteBranches(config.git.branchPrefix);
         for (const saved of savedBranches) {
-          if (remoteBranches.includes(saved)) {
+          if (catalog.has(saved)) {
             selectedBranches.push(saved);
           } else {
-            logger.warn(`Saved branch no longer exists on remote: ${saved} (skipped)`);
+            logger.warn(`Saved branch no longer exists ${describeLocation(sourceMode)}: ${saved} (skipped)`);
           }
         }
 
         if (selectedBranches.length === 0) {
-          logger.warn('No saved branches still exist on the remote; falling back to interactive selection');
+          logger.warn(`No saved branches still exist ${describeLocation(sourceMode)}; falling back to interactive selection`);
         }
       }
     } else {
@@ -142,7 +160,7 @@ async function runRelease(options = {}) {
     }
 
     if (selectedBranches.length === 0) {
-      selectedBranches = await selectBranchesInteractively(config.git.branchPrefix);
+      selectedBranches = await selectBranchesInteractively(config.git.branchPrefix, branchNames);
       if (selectedBranches.length === 0) {
         logger.warn('No branches selected');
         return;
@@ -169,6 +187,10 @@ async function runRelease(options = {}) {
 
     branches = selectedBranches.map(branch => branchInfoFromName(branch, config)).filter(Boolean);
   }
+
+  // Decide which ref each branch is released from: the local branch or origin's copy
+  await attachSourceRefs(branches, catalog, sourceMode);
+  attachExtraHashes(branches, commitsByTask);
 
   // Process each branch
   const releaseStatus = new ReleaseStatus();
@@ -199,6 +221,13 @@ async function runRelease(options = {}) {
       }
 
       try {
+        // Pick the commits first: it may prompt, and an invalid commit hash should fail before
+        // any release branch is created. Only commits tagged "[taskId]" that aren't on staging,
+        // plus — if the user agrees — the ones mentioning the task without following the
+        // convention, plus any given by hash.
+        const commits = options.listBranches ? null : await selectTaskCommits(branchInfo, config, releaseStatus);
+        if (signal.interrupted) break;
+
         // Create release branch
         const releaseBranch = await createReleaseBranch(
           branchInfo.branchName,
@@ -234,7 +263,10 @@ async function runRelease(options = {}) {
               // Commits are only read to build the MR description text, nothing is cherry-picked
               // here — so merge commits are kept in the list instead of being excluded/warned
               // about as "can't cherry-pick a merge", which wouldn't apply in this mode.
-              const commits = await getCommitsToCherryPick(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch, { excludeMerges: false });
+              const commits = await getCommitsToCherryPick(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch, {
+                excludeMerges: false,
+                sourceRef: branchInfo.sourceRef
+              });
 
               const mr = await createMR(config, {
                 sourceBranch: branchInfo.branchName,
@@ -258,10 +290,6 @@ async function runRelease(options = {}) {
           continue;
         }
 
-        // Cherry-pick only commits tagged "[taskId]" on this branch that aren't already on staging,
-        // plus — if the user agrees — the ones mentioning the task without following the convention
-        const commits = await selectTaskCommits(branchInfo, config, releaseStatus);
-        if (signal.interrupted) break;
         const cherryPickResult = await cherryPickCommits(branchInfo.branchName, branchInfo.taskId, config.git.stagingBranch, commits);
         if (signal.interrupted) break;
 
@@ -393,26 +421,22 @@ async function runRelease(options = {}) {
   logger.success('Release process completed');
 }
 
-// Resolves each { taskId, description? } to its real remote branch; prompts when several match.
-// Tasks without a description (bare IDs from -b) get one derived from the resolved branch name.
-async function resolveTasksToBranches(tasks, branchPrefix = {}) {
-  if (tasks.length === 0) {
-    return [];
-  }
-
-  const remoteBranches = await getRemoteBranches(branchPrefix);
+// Resolves each { taskId, description? } to its real branch among `branchNames`; prompts when
+// several match. Tasks without a description (bare IDs from -b) get one derived from the branch name.
+async function resolveTasksToBranches(tasks, branchPrefix = {}, branchNames = [], source = 'local') {
   const branches = [];
 
   for (const task of tasks) {
     const taskId = task.taskId.toUpperCase();
-    const matches = await resolveBranchNameForTaskId(taskId, remoteBranches, branchPrefix);
+    const matches = await resolveBranchNameForTaskId(taskId, branchNames, branchPrefix);
     let branchName;
+    let missingReason = null;
 
     if (matches.length === 1) {
       branchName = matches[0];
       logger.info(`${taskId} -> ${branchName}`);
     } else if (matches.length > 1) {
-      logger.warn(`Multiple remote branches match ${taskId}: ${matches.join(', ')}`);
+      logger.warn(`Multiple branches match ${taskId}: ${matches.join(', ')}`);
       const { chosen } = await inquirer.prompt([
         {
           type: 'list',
@@ -423,15 +447,90 @@ async function resolveTasksToBranches(tasks, branchPrefix = {}) {
       ]);
       branchName = chosen;
     } else {
+      // Only labels the task in the summary; it's reported as not processed
       branchName = `${branchPrefix.feature || 'feature/'}${taskId.toLowerCase()}`;
-      logger.warn(`No remote branch found matching ${taskId}; guessing ${branchName} (may not exist)`);
+      missingReason = `No branch found ${describeLocation(source)} matching ${taskId}`;
     }
 
     const description = task.description || describeBranch(branchName, branchPrefix);
-    branches.push({ taskId, description, branchName });
+    const branchInfo = { taskId, description, branchName };
+    if (task.extraCommits && task.extraCommits.length > 0) {
+      branchInfo.extraHashes = [...task.extraCommits];
+    }
+    if (missingReason) {
+      branchInfo.missingReason = missingReason;
+    }
+    branches.push(branchInfo);
   }
 
   return branches;
+}
+
+// 'local' (the default, from config.git.branchSource) or 'remote', overridden by --local/--remote.
+// --list-branches opens each MR straight from the source branch, so that branch must be on origin.
+function resolveSourceMode(options, config) {
+  if (options.remote) return 'remote';
+  if (options.local) return 'local';
+  const configured = config.git.branchSource || 'local';
+  if (options.listBranches) {
+    if (configured === 'local') {
+      logger.info('--list-branches opens each MR from the source branch, so branches are resolved on origin');
+    }
+    return 'remote';
+  }
+  return configured;
+}
+
+function describeLocation(source) {
+  return source === 'local' ? 'locally or on origin' : 'on origin';
+}
+
+// Sets branchInfo.sourceRef: the local branch when it exists locally (in local mode), origin's copy
+// otherwise. A local branch missing commits that are on origin would silently leave them out of the
+// release, so in that case the user picks which version to release (default: origin's).
+async function attachSourceRefs(branches, catalog, source) {
+  for (const branchInfo of branches) {
+    if (branchInfo.missingReason) continue;
+    const { branchName, taskId } = branchInfo;
+    const where = catalog.get(branchName);
+    const remoteRef = `origin/${branchName}`;
+
+    if (!where) {
+      branchInfo.missingReason = `Branch ${branchName} not found ${describeLocation(source)}`;
+      continue;
+    }
+
+    if (source !== 'local' || !where.local) {
+      branchInfo.sourceRef = remoteRef;
+      if (source === 'local') {
+        logger.info(`${taskId}: ${branchName} doesn't exist locally, using ${remoteRef}`);
+      }
+      continue;
+    }
+
+    branchInfo.sourceRef = branchName;
+    if (!where.remote) continue;
+
+    const behind = await countCommitsBetween(branchName, remoteRef);
+    if (behind === 0) continue;
+
+    const ahead = await countCommitsBetween(remoteRef, branchName);
+    logger.warn(`${taskId}: local ${branchName} is missing ${behind} commit(s) that are on ${remoteRef}` +
+      (ahead > 0 ? `, and has ${ahead} commit(s) not pushed` : ''));
+    const { chosen } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'chosen',
+        message: `Which version of ${branchName} should be released?`,
+        choices: [
+          { name: `${remoteRef} (includes the ${behind} commit(s) from origin)`, value: remoteRef },
+          { name: `Local ${branchName} as it is${ahead > 0 ? ` (includes the ${ahead} unpushed commit(s))` : ''}`, value: branchName }
+        ],
+        default: remoteRef
+      }
+    ]);
+    branchInfo.sourceRef = chosen;
+  }
 }
 
 // The commits to release for a task: the ones tagged "[TASK-ID] ..." and, when some commits mention
@@ -441,41 +540,159 @@ async function resolveTasksToBranches(tasks, branchPrefix = {}) {
 async function selectTaskCommits(branchInfo, config, releaseStatus) {
   const { branchName, taskId } = branchInfo;
   const base = config.git.stagingBranch;
-  const tagged = await getCommitsToCherryPick(branchName, taskId, base);
-  const loose = await findLooseTaskCommits(branchName, taskId, base);
-  if (loose.length === 0) {
-    return tagged;
+  const sourceOptions = { sourceRef: branchInfo.sourceRef };
+  const tagged = await getCommitsToCherryPick(branchName, taskId, base, sourceOptions);
+  const loose = await findLooseTaskCommits(branchName, taskId, base, sourceOptions);
+  let commits = tagged;
+
+  if (loose.length > 0) {
+    const list = loose.map(describeCommit);
+    logger.warn(`${loose.length} commit(s) on ${branchName} mention ${taskId} but don't follow the "[${taskId}] ..." convention:`);
+    for (const line of list) {
+      logger.warn(`  ${line}`);
+    }
+
+    const { includeLoose } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'includeLoose',
+        message: `Include ${loose.length === 1 ? 'it' : 'them'} in the ${taskId} release too?`,
+        default: false
+      }
+    ]);
+
+    const outcome = includeLoose ? 'included at your request' : 'NOT included';
+    releaseStatus.addNote(taskId, `${loose.length} commit(s) mention ${taskId} without the "[${taskId}] ..." convention and were ${outcome}: ${list.join('; ')}`);
+    if (includeLoose) {
+      commits = [...tagged, ...loose];
+    }
   }
 
-  const list = loose.map(c => `${c.hash.slice(0, 8)} ${c.message}`);
-  logger.warn(`${loose.length} commit(s) on ${branchName} mention ${taskId} but don't follow the "[${taskId}] ..." convention:`);
-  for (const line of list) {
-    logger.warn(`  ${line}`);
+  // Commits given by hash (task file "[+hash]" or --commits); with none given and nothing found,
+  // offer to type them, as a commit with no task ID at all can't be found any other way
+  let hashes = branchInfo.extraHashes || [];
+  if (hashes.length === 0 && commits.length === 0) {
+    hashes = await askForCommitHashes(branchInfo);
+  }
+  if (hashes.length > 0) {
+    const added = await addCommitsByHash(hashes, commits, branchInfo, base, releaseStatus);
+    if (added.length > 0) {
+      commits = [...commits, ...added];
+    }
   }
 
-  const { includeLoose } = await inquirer.prompt([
+  return commits.length > tagged.length
+    ? orderCommitsByHistory(branchName, commits, base, sourceOptions)
+    : commits;
+}
+
+// Validates commit hashes given for a task and returns the ones to cherry-pick on top of `current`.
+// Unknown/ambiguous hashes and merge commits fail the task (nothing has been created yet); commits
+// already on staging are skipped with a note; commits not on the source branch need confirmation.
+async function addCommitsByHash(hashes, current, branchInfo, base, releaseStatus) {
+  const { taskId, branchName } = branchInfo;
+  const resolved = await resolveExtraCommits(hashes, { sourceRef: branchInfo.sourceRef, baseBranch: base });
+
+  if (resolved.errors.length > 0) {
+    throw new GitError(`Invalid commit(s) for ${taskId}: ${resolved.errors.join('; ')}`);
+  }
+
+  if (resolved.alreadyOnBase.length > 0) {
+    const list = resolved.alreadyOnBase.map(describeCommit);
+    logger.warn(`${taskId}: ${list.length} commit(s) given by hash are already on ${base} — skipped: ${list.join('; ')}`);
+    releaseStatus.addNote(taskId, `${list.length} commit(s) given by hash were already on ${base} and were skipped: ${list.join('; ')}`);
+  }
+
+  let candidates = resolved.commits;
+  if (resolved.offBranch.length > 0) {
+    const list = resolved.offBranch.map(describeCommit);
+    logger.warn(`${taskId}: ${list.length} commit(s) given by hash are not on ${branchName}:`);
+    for (const line of list) {
+      logger.warn(`  ${line}`);
+    }
+    const { includeOffBranch } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'includeOffBranch',
+        message: `Include ${list.length === 1 ? 'it' : 'them'} in the ${taskId} release anyway?`,
+        default: false
+      }
+    ]);
+    if (!includeOffBranch) {
+      const off = new Set(resolved.offBranch.map(c => c.hash));
+      candidates = candidates.filter(c => !off.has(c.hash));
+      releaseStatus.addNote(taskId, `${list.length} commit(s) given by hash are not on ${branchName} and were NOT included: ${list.join('; ')}`);
+    }
+  }
+
+  const present = new Set(current.map(c => c.hash));
+  const added = candidates.filter(c => !present.has(c.hash));
+  if (added.length > 0) {
+    const list = added.map(describeCommit);
+    logger.info(`${taskId}: adding ${added.length} commit(s) given by hash: ${list.join('; ')}`);
+    releaseStatus.addNote(taskId, `${added.length} commit(s) added by hash: ${list.join('; ')}`);
+  }
+  return added;
+}
+
+// Asked when a task has no commits to release: the commit may just be missing its "[TASK-ID]" tag
+async function askForCommitHashes({ taskId, branchName }) {
+  const { enterHashes } = await inquirer.prompt([
     {
       type: 'confirm',
-      name: 'includeLoose',
-      message: `Include ${loose.length === 1 ? 'it' : 'them'} in the ${taskId} release too?`,
+      name: 'enterHashes',
+      message: `No commits tagged "[${taskId}] ..." found on ${branchName}. Enter the hash(es) of the commit(s) to release?`,
       default: false
     }
   ]);
+  if (!enterHashes) {
+    return [];
+  }
 
-  const outcome = includeLoose ? 'included at your request' : 'NOT included';
-  releaseStatus.addNote(taskId, `${loose.length} commit(s) mention ${taskId} without the "[${taskId}] ..." convention and were ${outcome}: ${list.join('; ')}`);
-
-  return includeLoose ? orderCommitsByHistory(branchName, [...tagged, ...loose], base) : tagged;
+  const { commitHashes } = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'commitHashes',
+      message: 'Commit hash(es), comma-separated (blank to skip):',
+      filter: (value) => String(value || '').split(',').map(hash => hash.trim()).filter(Boolean),
+      validate: (value) => {
+        const list = Array.isArray(value) ? value : String(value || '').split(',').map(h => h.trim()).filter(Boolean);
+        const bad = list.filter(hash => !isCommitHash(hash));
+        return bad.length === 0 || `Not commit hashes: ${bad.join(', ')}`;
+      }
+    }
+  ]);
+  return commitHashes;
 }
 
-// Why a branch given by full name can't be released: it isn't on origin (typo, other name, already
-// deleted). Lists the remote branches of the same task so the user can spot the right name.
-async function describeMissingBranch({ branchName, taskId }, remoteBranches, branchPrefix) {
-  const similar = await resolveBranchNameForTaskId(taskId, remoteBranches, branchPrefix);
+// Adds the --commits hashes to each task's own (from the task file); warns about task IDs in
+// --commits that aren't part of this release.
+function attachExtraHashes(branches, commitsByTask) {
+  for (const [taskId, hashes] of commitsByTask) {
+    const targets = branches.filter(b => b && b.taskId === taskId);
+    if (targets.length === 0) {
+      logger.warn(`--commits ${taskId}=... ignored: ${taskId} is not part of this release`);
+      continue;
+    }
+    for (const branchInfo of targets) {
+      branchInfo.extraHashes = [...new Set([...(branchInfo.extraHashes || []), ...hashes])];
+    }
+  }
+}
+
+function describeCommit(commit) {
+  return `${commit.hash.slice(0, 8)} ${commit.message}`;
+}
+
+// Why a branch given by full name can't be released: it doesn't exist (typo, other name, already
+// deleted). Lists the branches of the same task so the user can spot the right name.
+async function describeMissingBranch({ branchName, taskId }, branchNames, branchPrefix, source = 'local') {
+  const similar = await resolveBranchNameForTaskId(taskId, branchNames, branchPrefix);
+  const location = describeLocation(source);
   const hint = similar.length > 0
-    ? ` Branches on origin for ${taskId}: ${similar.join(', ')}`
-    : ` No branch on origin matches ${taskId}.`;
-  return `Branch ${branchName} not found on origin.${hint}`;
+    ? ` Branches ${location} for ${taskId}: ${similar.join(', ')}`
+    : ` No branch ${location} matches ${taskId}.`;
+  return `Branch ${branchName} not found ${location}.${hint}`;
 }
 
 // Builds branch info from a full branch name, extracting its task ID; null (with a warning) if none.
